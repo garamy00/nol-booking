@@ -513,25 +513,30 @@ class NolDriver:
         )
 
     def _click_layer_time(self, time_hhmm: str) -> None:
-        """목표 시각(12h AM/PM)으로 시작하는 TimeBlock 버튼을 클릭한다."""
+        """목표 시각(12h AM/PM)의 TimeBlock 버튼이 나타나면 클릭한다.
+
+        레이어에서 날짜를 바꾸면 회차 목록이 비동기로 갱신되므로, 곧바로
+        조회하면 이전 날짜의 회차가 잡혀 목표 시각을 못 찾을 수 있다.
+        목표 시각 버튼이 실제로 나타날 때까지 기다린 뒤 클릭한다.
+        """
         target = to_ampm(time_hhmm)
-        self._wait.until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "button[class*='TimeBlock_timeButton']")
-            )
-        )
-        buttons = self._driver.find_elements(
-            By.CSS_SELECTOR, "button[class*='TimeBlock_timeButton']"
-        )
-        for button in buttons:
-            button_text = (button.get_attribute("textContent") or "").strip()
-            if button_text.startswith(target):
-                button.click()
-                return
-        raise DriverError(
-            "change_schedule: time %s (%s) not found among time buttons"
-            % (time_hhmm, target)
-        )
+
+        def _find_target_time(driver):
+            selector = "button[class*='TimeBlock_timeButton']"
+            for button in driver.find_elements(By.CSS_SELECTOR, selector):
+                text = (button.get_attribute("textContent") or "").strip()
+                if text.startswith(target):
+                    return button
+            return False
+
+        try:
+            button = self._wait.until(_find_target_time)
+        except TimeoutException as exc:
+            raise DriverError(
+                "change_schedule: time %s (%s) not found among time buttons"
+                % (time_hhmm, target)
+            ) from exc
+        button.click()
 
     def _click_apply_button(self) -> None:
         """변경하기 버튼(EntButton_primary)을 클릭한다."""
