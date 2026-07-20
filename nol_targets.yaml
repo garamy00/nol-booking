@@ -1,0 +1,9 @@
+targets:
+  - grade: "R석"
+    consecutive: 2
+    # region:            # (선택) 좌표 영역 제한. 생략 시 전체 좌석맵
+    #   cx_min: 0
+    #   cx_max: 140
+poll:
+  interval_min: 30
+  interval_max: 60
