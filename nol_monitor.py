@@ -37,6 +37,16 @@ def check_once(
     Returns:
         이번 회차에 알린(=신규 발견된) 좌석 묶음 목록.
     """
+    # 토글 리로드 실패 등으로 잘못된 날짜(예 토글용 날짜)에 머물러 있으면
+    # 그 좌석을 매칭하지 않는다(다른 날짜 좌석을 잘못 알리는 것을 막는다).
+    if not driver.is_on_target_schedule():
+        logger.warning(
+            "Not on target schedule (want %s %s); skipping seat match this round",
+            cfg.nol.date,
+            cfg.nol.time,
+        )
+        return []
+
     seats = driver.read_available_seats()
     groups = find_nol_groups(seats, cfg.targets)
     fresh = state.new_groups(groups)

@@ -44,8 +44,12 @@ def test_parse_remaining_missing_pattern_returns_none():
 
 
 class FakeDriver:
-    def __init__(self, seats):
+    def __init__(self, seats, on_target=True):
         self._seats = seats
+        self._on_target = on_target
+
+    def is_on_target_schedule(self):
+        return self._on_target
 
     def read_available_seats(self):
         return self._seats
@@ -98,3 +102,16 @@ def test_check_once_same_group_twice_notifies_once():
     check_once(FakeDriver(seats), cfg, state, notify=sent.append)
     check_once(FakeDriver(seats), cfg, state, notify=sent.append)
     assert len(sent) == 1
+
+
+def test_check_once_skips_match_when_not_on_target_schedule():
+    # 잘못된 날짜(예 토글용 날짜)에 머물러 있으면 좌석이 매칭되어도 알리지 않는다
+    sent = []
+    seats = [
+        NolSeat(section="A", row=15, number=5, grade="R석", seat_id="s1"),
+        NolSeat(section="A", row=15, number=6, grade="R석", seat_id="s2"),
+    ]
+    driver = FakeDriver(seats, on_target=False)
+    fresh = check_once(driver, _cfg(), SeatState(), notify=sent.append)
+    assert fresh == []
+    assert sent == []

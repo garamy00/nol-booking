@@ -191,7 +191,10 @@ def load_nol_config(env_path: str, nol_targets_path: str) -> NolAppConfig:
     Raises:
         ConfigError: 파일 누락·키 누락·형식 오류.
     """
-    parser = configparser.ConfigParser()
+    # [NOL] 값에 "20260805  # 리로드용" 같은 인라인 주석이 붙어도 값에 섞이지
+    # 않도록 '#' 이후를 주석으로 처리한다. 이 파서는 비밀번호 없이 [NOL]/
+    # [TELEGRAM] 토큰만 읽으므로 '#' 절단이 값을 훼손할 위험이 없다.
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#",))
     if not parser.read(env_path):
         raise ConfigError("cannot read env file: %s" % env_path)
 

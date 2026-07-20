@@ -189,6 +189,34 @@ class NolDriver:
         self._require_attached()
         return SEAT_PAGE_MARKER in self._driver.current_url
 
+    def current_schedule_text(self) -> str:
+        """상단에 표시된 현재 선택 일정 텍스트를 반환한다.
+
+        예: "2026.08.02(일) 2:00 PM". 요소가 없으면 빈 문자열.
+        """
+        self._require_attached()
+        return (
+            self._driver.execute_script(
+                "const e = document.querySelector('[class*=scheduleDate]');"
+                "return e ? (e.innerText || e.textContent || '') : '';"
+            )
+            or ""
+        )
+
+    def is_on_target_schedule(self) -> bool:
+        """현재 예매창이 목표 날짜/회차(cfg.date/time)를 보여주는지 확인한다.
+
+        토글 리로드가 복귀에 실패해 다른 날짜(예 토글용 날짜)에 머무를 때
+        그 좌석을 잘못 매칭·알림하는 것을 막기 위한 안전장치다.
+        """
+        text = self.current_schedule_text()
+        date_str = "%s.%s.%s" % (
+            self._cfg.date[:4],
+            self._cfg.date[4:6],
+            self._cfg.date[6:8],
+        )
+        return date_str in text and to_ampm(self._cfg.time) in text
+
     def enter_booking(self) -> None:
         """goods 페이지에서 목표 날짜·회차를 선택해 예매창으로 진입한다.
 
@@ -198,8 +226,10 @@ class NolDriver:
             DriverError: 각 단계 실패 시, 어떤 단계인지 메시지에 포함해 발생.
         """
         self._require_attached()
-        if self.is_on_seat_page():
-            logger.info("Already on seat page; skip booking entry")
+        # 목표 일정의 좌석페이지일 때만 스킵한다. 잘못된 날짜(예 토글용)에
+        # 갇혀 있으면 스킵하지 말고 goods부터 다시 진입해 목표로 되돌린다.
+        if self.is_on_seat_page() and self.is_on_target_schedule():
+            logger.info("Already on target seat page; skip booking entry")
             return
 
         if "/goods/" not in self._driver.current_url:
@@ -399,10 +429,17 @@ class NolDriver:
         logger.info("Schedule changed to date=%s time=%s", date, time_hhmm)
 
     def _open_date_layer(self) -> None:
-        """일정변경 버튼을 눌러 레이어를 연다."""
-        self._driver.find_element(
-            By.CSS_SELECTOR, "button.SubHeader_layerDateButton__vncqy"
-        ).click()
+        """일정변경 버튼이 준비되면 눌러 레이어를 연다.
+
+        새로 진입한 직후엔 좌석은 렌더됐어도 상단 일정변경 버튼이 아직
+        안 떠 있을 수 있어, 클릭 가능해질 때까지 기다린 뒤 누른다.
+        """
+        button = self._wait.until(
+            EC.element_to_be_clickable(
+                (By.CSS_SELECTOR, "button.SubHeader_layerDateButton__vncqy")
+            )
+        )
+        button.click()
         self._wait.until(
             EC.presence_of_element_located(
                 (By.CSS_SELECTOR, "[class*='LayerDate_container']")
