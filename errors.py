@@ -13,5 +13,9 @@ class DriverError(AppBaseError):
     """브라우저 제어·페이지 파싱 실패."""
 
 
+class LauncherError(AppBaseError):
+    """Chrome 런처(디버그 포트 실행·대기) 실패."""
+
+
 class NotifyError(AppBaseError):
     """알림 전송 실패."""
