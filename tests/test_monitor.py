@@ -1,4 +1,7 @@
+import pytest
+
 from config import AppConfig, NtokConfig, PollConfig, Target, TelegramConfig
+from errors import DriverError
 from seats import Seat
 from state import SeatState
 import monitor
@@ -17,6 +20,11 @@ class FakeDriver:
 
     def read_available_seats(self):
         return self._seats
+
+
+class ExpiredSessionDriver(FakeDriver):
+    def is_session_alive(self):
+        return False
 
 
 def _cfg():
@@ -58,3 +66,9 @@ def test_run_once_same_group_twice_notifies_once():
     monitor.run_once(FakeDriver(seats), cfg, state, notify=sent.append)
     monitor.run_once(FakeDriver(seats), cfg, state, notify=sent.append)
     assert len(sent) == 1
+
+
+def test_run_once_session_expired_raises_drivererror():
+    driver = ExpiredSessionDriver([])
+    with pytest.raises(DriverError):
+        monitor.run_once(driver, _cfg(), SeatState(), notify=lambda _text: None)

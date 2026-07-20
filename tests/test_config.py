@@ -164,6 +164,19 @@ def test_non_integer_rows_raises_configerror(tmp_path):
         load_config(env_path, targets_path)
 
 
+def test_poll_not_mapping_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - floor: "1F"
+        section: "B"
+        rows: [1, 2, 3]
+    poll: sometext
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
 def test_non_integer_interval_min_raises_configerror(tmp_path):
     targets_yaml = """
     targets:

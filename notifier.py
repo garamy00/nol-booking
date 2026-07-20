@@ -26,7 +26,8 @@ def send_telegram(cfg: TelegramConfig, text: str) -> None:
             timeout=10,
         )
     except requests.RequestException as exc:
-        raise NotifyError("telegram request failed: %s" % exc) from exc
+        # 예외 메시지에 요청 URL(토큰 포함)이 담길 수 있으므로 클래스명만 사용한다
+        raise NotifyError("telegram request failed: %s" % type(exc).__name__) from exc
 
     if not resp.ok:
         raise NotifyError("telegram returned status %s" % resp.status_code)

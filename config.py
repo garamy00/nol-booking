@@ -136,6 +136,8 @@ def _load_targets(targets_path: str) -> tuple[list[Target], PollConfig]:
     poll_raw = data.get("poll")
     if poll_raw is None:
         raise ConfigError("poll configuration missing")
+    if not isinstance(poll_raw, dict):
+        raise ConfigError("poll must be a mapping")
 
     try:
         interval_min_val = poll_raw.get("interval_min")

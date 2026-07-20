@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 
 from config import AppConfig, load_config
-from errors import AppBaseError
+from errors import AppBaseError, DriverError
 from notifier import send_telegram
 from seats import find_available_groups
 from state import SeatState
@@ -28,7 +28,7 @@ def run_once(
     driver.refresh()
 
     if not driver.is_session_alive():
-        raise AppBaseError("session expired")
+        raise DriverError("session expired")
 
     seats = driver.read_available_seats()
     groups = find_available_groups(seats, cfg.targets)
@@ -84,8 +84,15 @@ def main() -> None:
                 # 세션 만료 등 복구 시도
                 logger.warning("Poll error: %s; attempting re-login", exc)
                 notify("[국립극장] 모니터 이상: %s (재로그인 시도)" % exc)
-                driver.login()
-                driver.open_seat_page()
+                try:
+                    driver.login()
+                    driver.open_seat_page()
+                except AppBaseError as relogin_exc:
+                    # 재로그인 자체가 실패해도 루프는 계속 돌아야 한다
+                    logger.error("Re-login failed: %s", type(relogin_exc).__name__)
+                    notify("[국립극장] 재로그인 실패: %s" % type(relogin_exc).__name__)
+                    _sleep_with_jitter(cfg)
+                    continue
 
             _sleep_with_jitter(cfg)
     except KeyboardInterrupt:
