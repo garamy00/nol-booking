@@ -5,3 +5,4 @@ __pycache__/
 chrome_profile/
 .superpowers/
 *.swp
+scratch_nol_verify.py
