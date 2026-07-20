@@ -1,0 +1,8 @@
+targets:
+  - floor: "1F"
+    section: "B"
+    rows: [1, 2, 3, 4, 5]
+    consecutive: 2
+poll:
+  interval_min: 30
+  interval_max: 60
