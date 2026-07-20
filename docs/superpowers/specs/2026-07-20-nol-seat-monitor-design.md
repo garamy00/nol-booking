@@ -59,13 +59,27 @@ targets.yaml에 NOL 타깃을 사이트 구분과 함께 추가한다(형식은 
 타이머 만료 시: 이전페이지 → "사이트에서 나가시겠습니까?"에서 나가기 →
 바깥 루프로 재시작.
 
-## 좌석 판별 (기존 inter.py 기반, 실측 확정 필요)
-- 예매창 좌석: `ifrmSeat` → `ifrmSeatDetail` → `#divSeatBox`의 `span[class^=SeatN]`
-  = 예매 가능석. `title`에 구역·번호 정보.
-- 등급별 잔여수: `#GradeDetail`의 `remaincnt`/`seatgradename` 속성.
-- 등급/구역 네비게이션: `fnSwapGrade(n)` / `fnBlockSeatUpdate(...)`.
-- 특정 등급/구역/연석 필터링을 하므로, 타깃 등급·구역으로 네비게이션 후 SeatN을
-  읽어 seats.py의 연석 매칭에 태운다.
+## 좌석 판별 (실측 완료 — docs/discovery-nol.md)
+예매하기 클릭 시 같은 탭이 `/onestop/seat`(최신 React SPA)로 이동. 좌석은 SVG
+`<circle class="SeatMap_seatSvg__... js-seat">`.
+- **가용**: `circle.js-seat` 중 `SeatMap_disabled__...` 클래스가 없는 것.
+- **등급**: 채우기 색상(fill)으로 식별 — VIP `#7c68ee` / OP `#1ca814` / R `#17b3ff`
+  / S `#fb7e4e` / A `#a0d53f` (매진 회색 `#edeff3`).
+- **좌표**: circle `cx`,`cy`. 사람이 읽는 구역/열/번호 라벨은 **없음**.
+
+## 매칭 모델 (확정: 등급 + 연석 + 좌표영역)
+NOL은 구역/열 이름이 없으므로 좌표 기반으로 매칭한다.
+- 대상 등급(색상)으로 가용 좌석 필터.
+- (선택) 좌표 영역 제한: `cx`/`cy` 범위로 특정 구역만 한정. 미지정 시 전체.
+- 연석: 같은 행(≈같은 `cy`, 허용오차 내)에서 `cx`가 근접(좌석 간격 임계 이내)하게
+  이어지는 좌석을 인접으로 보고, N개 이상 이어지는 묶음을 찾는다.
+- targets.yaml의 NOL 타깃: `grade`, `consecutive`, (선택) `region: {cx:[min,max], cy:[min,max]}`.
+
+## 상단 컨트롤 (실측)
+- 일정 카드 `[class*=scheduleCard]`에 선택 일시 + 남은 세션시간 표시
+  (예 "2026.08.02(일) 2:00 PM ... 좌석 선택 시간 5:35") → 남은시간 파싱 가능.
+- 일정변경: `button.SubHeader_layerDateButton__vncqy`.
+- 예매창 나가기: 브라우저 뒤로가기 → 확인 다이얼로그(구현 시 확정).
 
 ## 발견 시 홀드
 알림 후 안쪽/바깥 루프를 모두 중단하고, 예매창을 목표 좌석화면에 유지한 채
