@@ -49,7 +49,7 @@ def _sleep_with_jitter(cfg: AppConfig) -> None:
 
 
 def main() -> None:
-    """설정 로드 → 로그인 → 좌석페이지 진입 → 무한 폴링."""
+    """설정 로드 → 좌석페이지 attach → 무한 폴링."""
     # booking_driver는 실제 브라우저 제어가 필요한 모듈이므로 진입점에서만 지연 임포트한다
     from booking_driver import BookingDriver
 
@@ -68,9 +68,7 @@ def main() -> None:
             logger.error("Notify failed: %s", exc)
 
     try:
-        driver.start()
-        driver.login()
-        driver.open_seat_page()
+        driver.attach()
         logger.info(
             "Monitor started; polling every %d-%d s",
             cfg.poll.interval_min,
@@ -81,16 +79,15 @@ def main() -> None:
             try:
                 run_once(driver, cfg, state, notify)
             except AppBaseError as exc:
-                # 세션 만료 등 복구 시도
-                logger.warning("Poll error: %s; attempting re-login", exc)
-                notify("[국립극장] 모니터 이상: %s (재로그인 시도)" % exc)
+                # 세션 만료 등 복구 시도: 좌석 선택 창을 다시 찾아 attach
+                logger.warning("Poll error: %s; attempting re-attach", exc)
+                notify("[국립극장] 모니터 이상: %s (재연결 시도)" % exc)
                 try:
-                    driver.login()
-                    driver.open_seat_page()
-                except AppBaseError as relogin_exc:
-                    # 재로그인 자체가 실패해도 루프는 계속 돌아야 한다
-                    logger.error("Re-login failed: %s", type(relogin_exc).__name__)
-                    notify("[국립극장] 재로그인 실패: %s" % type(relogin_exc).__name__)
+                    driver.attach()
+                except AppBaseError as reattach_exc:
+                    # 재연결 자체가 실패해도 루프는 계속 돌아야 한다
+                    logger.error("Re-attach failed: %s", type(reattach_exc).__name__)
+                    notify("[국립극장] 재연결 실패: %s" % type(reattach_exc).__name__)
                     _sleep_with_jitter(cfg)
                     continue
 
@@ -98,7 +95,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     finally:
-        driver.quit()
+        driver.close()
 
 
 if __name__ == "__main__":
