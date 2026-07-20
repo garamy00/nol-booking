@@ -45,3 +45,27 @@ def test_read_goods_url_missing_section_raises(tmp_path):
     env_path = _write_env(tmp_path, bad)
     with pytest.raises(LauncherError):
         nol_chrome._read_goods_url(env_path)
+
+
+def test_is_debugger_up_false_when_request_fails(monkeypatch):
+    def boom(*args, **kwargs):
+        import requests
+
+        raise requests.RequestException("no server")
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", boom)
+    assert nol_chrome.is_debugger_up() is False
+
+
+def test_wait_for_debugger_raises_on_timeout(monkeypatch):
+    monkeypatch.setattr(nol_chrome, "is_debugger_up", lambda: False)
+    monkeypatch.setattr(nol_chrome.time, "sleep", lambda _s: None)
+    with pytest.raises(LauncherError):
+        nol_chrome.wait_for_debugger(timeout=0.0)
+
+
+def test_wait_for_debugger_returns_when_up(monkeypatch):
+    monkeypatch.setattr(nol_chrome, "is_debugger_up", lambda: True)
+    nol_chrome.wait_for_debugger(timeout=5.0)

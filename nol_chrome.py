@@ -9,12 +9,23 @@ from __future__ import annotations
 
 import configparser
 import logging
+import time
+
+import requests
 
 from errors import LauncherError
 
 logger = logging.getLogger(__name__)
 
 ENV_PATH = ".env"
+
+DEBUG_PORT = 9222
+
+# DevTools 준비 폴링 간격(초)
+_POLL_INTERVAL_SEC = 0.5
+
+# is_debugger_up의 HTTP 타임아웃(초)
+_PROBE_TIMEOUT_SEC = 1.0
 
 
 def _read_goods_url(env_path: str) -> str:
@@ -39,3 +50,39 @@ def _read_goods_url(env_path: str) -> str:
         raise LauncherError("[NOL] must contain URL and GOODS_ID")
 
     return "%s/%s" % (nol["URL"].strip(), nol["GOODS_ID"].strip())
+
+
+def is_debugger_up() -> bool:
+    """DevTools(127.0.0.1:9222)가 실제로 응답하면 True.
+
+    단순 포트 오픈이 아니라 /json/version 응답으로 attach 가능 여부를 판단한다.
+    """
+    url = "http://127.0.0.1:%d/json/version" % DEBUG_PORT
+    try:
+        resp = requests.get(url, timeout=_PROBE_TIMEOUT_SEC)
+    except requests.RequestException:
+        return False
+    return resp.status_code == 200
+
+
+def wait_for_debugger(timeout: float = 20.0) -> None:
+    """DevTools가 응답할 때까지 폴링한다.
+
+    Raises:
+        LauncherError: timeout 내에 응답이 없을 때. 같은 프로필이 디버그 포트
+            없이 이미 열려 있으면 이 경로로 실패한다.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if is_debugger_up():
+            return
+        time.sleep(_POLL_INTERVAL_SEC)
+
+    if is_debugger_up():
+        return
+
+    raise LauncherError(
+        "debug port %d not responding within %.0fs; a Chrome using this "
+        "profile may already be open without the debug port — close it and "
+        "retry" % (DEBUG_PORT, timeout)
+    )
