@@ -3,7 +3,9 @@ from seats import Seat, SeatGroup, find_available_groups
 
 
 def _seat(row, number, available, floor="1F", section="B"):
-    return Seat(floor=floor, section=section, row=row, number=number, available=available)
+    return Seat(
+        floor=floor, section=section, row=row, number=number, available=available
+    )
 
 
 TARGET_2 = Target(floor="1F", section="B", rows=[1, 2], consecutive=2)

@@ -30,7 +30,9 @@ def test_send_posts_to_bot_api(monkeypatch):
 
 
 def test_send_raises_notifyerror_on_http_failure(monkeypatch):
-    monkeypatch.setattr(notifier.requests, "post", lambda url, data, timeout: _Resp(False))
+    monkeypatch.setattr(
+        notifier.requests, "post", lambda url, data, timeout: _Resp(False)
+    )
     with pytest.raises(NotifyError):
         notifier.send_telegram(TelegramConfig(token="t", chat_id="c"), "hi")
 

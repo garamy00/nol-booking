@@ -131,9 +131,7 @@ def _load_targets(targets_path: str) -> tuple[list[Target], PollConfig]:
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, ConfigError):
                 raise
-            raise ConfigError(
-                "invalid target %d: %s" % (i, str(exc))
-            ) from exc
+            raise ConfigError("invalid target %d: %s" % (i, str(exc))) from exc
 
     poll_raw = data.get("poll")
     if poll_raw is None:
