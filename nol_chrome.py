@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import configparser
 import logging
+import os
+import subprocess
 import time
 
 import requests
@@ -20,6 +22,12 @@ logger = logging.getLogger(__name__)
 ENV_PATH = ".env"
 
 DEBUG_PORT = 9222
+
+# 이 도구 전용 Chrome 프로필(로그인 세션 영속). 스크립트 위치 기준 절대경로.
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_profile")
+
+# macOS 기본 Chrome 실행 파일. NOL_CHROME_BINARY로 오버라이드 가능.
+_DEFAULT_CHROME_BINARY = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 # DevTools 준비 폴링 간격(초)
 _POLL_INTERVAL_SEC = 0.5
@@ -86,3 +94,69 @@ def wait_for_debugger(timeout: float = 20.0) -> None:
         "profile may already be open without the debug port — close it and "
         "retry" % (DEBUG_PORT, timeout)
     )
+
+
+def _chrome_binary() -> str:
+    """Chrome 실행 파일 경로. 환경변수 오버라이드 우선."""
+    return os.environ.get("NOL_CHROME_BINARY", _DEFAULT_CHROME_BINARY)
+
+
+def _build_launch_args(goods_url: str) -> list[str]:
+    """Chrome 실행 인수 리스트를 조립한다(goods_url을 마지막에 둔다)."""
+    return [
+        _chrome_binary(),
+        "--remote-debugging-port=%d" % DEBUG_PORT,
+        "--user-data-dir=%s" % PROFILE_DIR,
+        goods_url,
+    ]
+
+
+def launch_chrome(goods_url: str) -> None:
+    """전용 프로필로 Chrome을 detached 실행하고 goods 페이지를 연다.
+
+    Raises:
+        LauncherError: Chrome 실행 파일을 찾지 못함.
+    """
+    args = _build_launch_args(goods_url)
+    try:
+        # start_new_session으로 런처 종료와 무관하게 Chrome이 계속 뜨게 한다
+        subprocess.Popen(
+            args,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError as exc:
+        raise LauncherError("chrome binary not found: %s" % args[0]) from exc
+
+    logger.info(
+        "Launched Chrome on debug port %d with profile %s",
+        DEBUG_PORT,
+        PROFILE_DIR,
+    )
+
+
+def main() -> None:
+    """디버그 포트가 비어 있으면 Chrome을 띄우고 준비될 때까지 대기한다."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
+
+    if is_debugger_up():
+        logger.info("Chrome already running on debug port %d", DEBUG_PORT)
+        return
+
+    goods_url = _read_goods_url(ENV_PATH)
+    launch_chrome(goods_url)
+    wait_for_debugger()
+    logger.info("Chrome ready on debug port %d", DEBUG_PORT)
+
+
+if __name__ == "__main__":
+    import sys
+
+    try:
+        main()
+    except LauncherError as exc:
+        logger.error("Launcher failed: %s", exc)
+        sys.exit(1)
