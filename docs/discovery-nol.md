@@ -59,7 +59,23 @@
 - **일정변경**: `button.SubHeader_layerDateButton__vncqy` (클릭 시 날짜/회차 재선택 레이어).
 - 등급 범례 토글: `button.SeatGradeLayer_toggleButton__ozikg`.
 - 좌석선택 후 진행: `선택 완료`(EntButton) 버튼.
-- 예매창 나가기: 브라우저 뒤로가기 → 확인 다이얼로그(구현 시 확정).
+
+### 일정변경 레이어 (실측 완료)
+`일정변경` 클릭 → 레이어 `.LayerDate_container__UF1q8` (닫기 `.LayerDate_buttonClose__ROb5u`).
+- 캘린더(EntCalendar, swiper 기반):
+  - 월 표시 `h3.EntCalendar_month__9tEIV` (예 "2026.08"), 이동 `#swiperButtonPrev`/`#swiperButtonNext`.
+  - **활성 슬라이드 `.swiper-slide-active`에서만 날짜 클릭** (슬라이드 여러 개).
+  - 날짜 버튼 `li.EntCalendar_dateItem__ZC7uF > button.EntCalendar_dateButton__6TxQi`
+    (공연 없으면 `disabled`), 숫자 `span.EntCalendar_number__5Ag2T`.
+- 회차: 날짜 선택 시 표시되는 `button.TimeBlock_timeButton__79vnB`.
+  텍스트 예 "3:00 PM VIP석 73 OP석 0 R석 37 S석 5 A석 80" — **12h AM/PM + 회차별 등급 잔여수**.
+  (24h "15:00"→"3:00 PM" 변환 매칭)
+- 적용: `button.EntButton_primary...` "변경하기" (날짜+회차 선택 시 활성). 클릭 시 좌석맵 리로드.
+
+### 나가기 / 재진입 (실측)
+- 세션 내 리로드: 일정변경으로 TOGGLE 날짜/시간 → 변경하기 → 다시 TARGET → 변경하기.
+- 세션 만료 재진입: `driver.get({goods_url})` (뒤로가기 시 확인창 없이 goods로 감) 후
+  goods 진입 절차 반복 → 새 10분 세션.
 
 ### 매칭 함의 (중요)
 DOM이 구역/열 이름을 안 주므로, NOL 좌석 매칭은:
