@@ -436,7 +436,7 @@ class NolDriver:
         """
         button = self._wait.until(
             EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button.SubHeader_layerDateButton__vncqy")
+                (By.CSS_SELECTOR, "button[class*='SubHeader_layerDateButton']")
             )
         )
         button.click()
@@ -445,14 +445,25 @@ class NolDriver:
                 (By.CSS_SELECTOR, "[class*='LayerDate_container']")
             )
         )
+        # 레이어 컨테이너가 떠도 내부 캘린더(월 헤더)는 잠시 뒤 렌더되므로 대기한다
+        self._wait.until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "[class*='EntCalendar_month']")
+            )
+        )
 
     def _advance_layer_calendar_to_month(self, yyyymmdd: str) -> None:
         """레이어(EntCalendar) 월을 목표 월까지 next/prev로 이동한다."""
         target_label = _month_label(yyyymmdd, ".")
         for _ in range(MAX_MONTH_ADVANCE):
-            current = self._driver.find_element(
-                By.CSS_SELECTOR, "h3.EntCalendar_month__9tEIV"
-            ).text.strip()
+            # Selenium .text가 이 SPA 요소에서 빈 값을 주는 경우가 있어
+            # textContent로 직접 읽는다(렌더링 상태와 무관).
+            current = (
+                self._driver.find_element(
+                    By.CSS_SELECTOR, "[class*='EntCalendar_month']"
+                ).get_attribute("textContent")
+                or ""
+            ).strip()
             if current == target_label:
                 return
             # "YYYY.MM" 고정폭 형식이라 문자열 비교로 방향 판단이 가능하다
@@ -478,15 +489,18 @@ class NolDriver:
             By.CSS_SELECTOR, ".swiper-slide-active"
         )
         buttons = active_slide.find_elements(
-            By.CSS_SELECTOR, "button.EntCalendar_dateButton__6TxQi"
+            By.CSS_SELECTOR, "button[class*='EntCalendar_dateButton']"
         )
         for button in buttons:
             if button.get_attribute("disabled"):
                 continue
             numbers = button.find_elements(
-                By.CSS_SELECTOR, "span.EntCalendar_number__5Ag2T"
+                By.CSS_SELECTOR, "span[class*='EntCalendar_number']"
             )
-            if numbers and numbers[0].text.strip() == day_num:
+            if not numbers:
+                continue
+            number_text = (numbers[0].get_attribute("textContent") or "").strip()
+            if number_text == day_num:
                 button.click()
                 return
         raise DriverError(
@@ -498,14 +512,15 @@ class NolDriver:
         target = to_ampm(time_hhmm)
         self._wait.until(
             EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "button.TimeBlock_timeButton__79vnB")
+                (By.CSS_SELECTOR, "button[class*='TimeBlock_timeButton']")
             )
         )
         buttons = self._driver.find_elements(
-            By.CSS_SELECTOR, "button.TimeBlock_timeButton__79vnB"
+            By.CSS_SELECTOR, "button[class*='TimeBlock_timeButton']"
         )
         for button in buttons:
-            if button.text.strip().startswith(target):
+            button_text = (button.get_attribute("textContent") or "").strip()
+            if button_text.startswith(target):
                 button.click()
                 return
         raise DriverError(
