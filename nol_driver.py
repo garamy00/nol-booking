@@ -28,7 +28,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from config import NolConfig
 from errors import DriverError
-from nol_seats import NolSeat, grade_from_fill
+from nol_seats import NolSeat, parse_seat_meta
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +44,38 @@ MAX_MONTH_ADVANCE = 12
 _REMAINING_STRIP_RE = re.compile(r"\s+")
 _REMAINING_RE = re.compile(r"좌석선택시간(\d+):(\d+)")
 
+# WHY: NOL 좌석 SVG 자체에는 구역/열/번호 라벨이 없다. 대신 각 가용 좌석
+# circle의 React fiber(내부 프로퍼티 `__reactFiber$...`)에 렌더링 이전의
+# 원본 seat 메타데이터(memoizedProps.seat: floor/rowNo/seatNo/seatGradeName)가
+# 그대로 보존되어 있어 이를 직접 읽어낸다. React 내부 구현(비공개 API)에
+# 의존하므로 interpark가 빌드를 바꾸면(fiber 키 접두어, prop 구조 등)
+# 이 스크립트도 함께 갱신해야 한다.
 _READ_SEATS_JS = """
-const circles = document.querySelectorAll('circle.js-seat');
-const result = [];
+const circles = [...document.querySelectorAll('circle.js-seat')];
+const out = [];
 for (const c of circles) {
-    const cls = c.getAttribute('class') || '';
-    if (/disabled/i.test(cls)) continue;
-    let fill = c.getAttribute('fill');
-    if (!fill) fill = getComputedStyle(c).fill;
-    result.push({id: c.id, fill: fill, cx: c.getAttribute('cx'), cy: c.getAttribute('cy')});
+    if ([...c.classList].some((x) => /disabled/i.test(x))) continue;
+    const fiberKey = Object.keys(c).find((k) => k.startsWith('__reactFiber$'));
+    if (!fiberKey) continue;
+    let fiber = c[fiberKey];
+    let seat = null;
+    for (let i = 0; i < 4 && fiber; i++) {
+        if (fiber.memoizedProps && fiber.memoizedProps.seat) {
+            seat = fiber.memoizedProps.seat;
+            break;
+        }
+        fiber = fiber.return;
+    }
+    if (!seat) continue;
+    out.push({
+        id: c.id,
+        floor: seat.floor,
+        rowNo: seat.rowNo,
+        seatNo: seat.seatNo,
+        grade: seat.seatGradeName,
+    });
 }
-return result;
+return out;
 """
 
 
@@ -99,19 +120,6 @@ def parse_remaining(card_text: str) -> int | None:
         return None
     minutes, seconds = int(match.group(1)), int(match.group(2))
     return minutes * 60 + seconds
-
-
-def circle_to_seat(raw: dict) -> NolSeat | None:
-    """execute_script로 읽은 circle 원시 dict(id/fill/cx/cy)를 NolSeat로 변환한다.
-
-    fill이 등급으로 매핑되지 않으면(매진 회색·미지의 색상) None을 반환한다.
-    """
-    grade = grade_from_fill(raw["fill"])
-    if grade is None:
-        return None
-    return NolSeat(
-        seat_id=raw["id"], grade=grade, cx=float(raw["cx"]), cy=float(raw["cy"])
-    )
 
 
 def _month_label(yyyymmdd: str, sep: str) -> str:
@@ -323,7 +331,8 @@ class NolDriver:
         )
 
     def read_available_seats(self) -> list[NolSeat]:
-        """예매창 SVG에서 가용 좌석(circle.js-seat, disabled 제외) 목록을 읽는다.
+        """예매창 SVG에서 가용 좌석(circle.js-seat, disabled 제외)의 React fiber
+        라벨(구역/열/번호/등급)을 읽어 NolSeat 목록으로 변환한다.
 
         Raises:
             DriverError: attach되지 않았거나 스크립트 실행 실패.
@@ -336,7 +345,7 @@ class NolDriver:
 
         seats = [
             seat
-            for seat in (circle_to_seat(raw) for raw in raw_seats or [])
+            for seat in (parse_seat_meta(raw) for raw in raw_seats or [])
             if seat is not None
         ]
         logger.info("Read %d available seats", len(seats))

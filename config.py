@@ -48,16 +48,6 @@ class AppConfig:
 
 
 @dataclass
-class Region:
-    """좌표 영역 제한 (cx/cy 범위). 각 경계는 None이면 무제한."""
-
-    cx_min: float | None = None
-    cx_max: float | None = None
-    cy_min: float | None = None
-    cy_max: float | None = None
-
-
-@dataclass
 class NolConfig:
     url: str
     goods_id: str
@@ -69,9 +59,10 @@ class NolConfig:
 
 @dataclass
 class NolTarget:
-    grade: str
+    grade: str | None = None
+    section: str | None = None
+    rows: list[int] | None = None
     consecutive: int = 1
-    region: Region | None = None
 
 
 @dataclass
@@ -227,29 +218,6 @@ def load_nol_config(env_path: str, nol_targets_path: str) -> NolAppConfig:
     return NolAppConfig(nol=nol, telegram=telegram, targets=targets, poll=poll)
 
 
-def _to_float_or_none(value: object) -> float | None:
-    """YAML 값을 float 또는 None으로 변환한다."""
-    return None if value is None else float(value)
-
-
-def _parse_region(region_raw: object) -> Region | None:
-    """target의 region 매핑을 Region으로 변환한다. 없으면 None."""
-    if region_raw is None:
-        return None
-    if not isinstance(region_raw, dict):
-        raise ConfigError("region must be a mapping")
-
-    try:
-        return Region(
-            cx_min=_to_float_or_none(region_raw.get("cx_min")),
-            cx_max=_to_float_or_none(region_raw.get("cx_max")),
-            cy_min=_to_float_or_none(region_raw.get("cy_min")),
-            cy_max=_to_float_or_none(region_raw.get("cy_max")),
-        )
-    except (TypeError, ValueError) as exc:
-        raise ConfigError("invalid region: %s" % str(exc)) from exc
-
-
 def _parse_nol_poll(poll_raw: object) -> PollConfig | None:
     """nol_targets.yaml의 poll 매핑을 PollConfig로 변환한다. 없으면 None."""
     if poll_raw is None:
@@ -297,23 +265,41 @@ def _load_nol_targets(
     for i, item in enumerate(targets_raw):
         if not isinstance(item, dict):
             raise ConfigError("nol target item %d is not a dictionary" % i)
-
-        grade = item.get("grade")
-        if grade is None:
-            raise ConfigError("nol target %d missing required key: grade" % i)
-
-        try:
-            consecutive = int(item.get("consecutive", 1))
-        except (TypeError, ValueError) as exc:
-            raise ConfigError("invalid nol target %d: %s" % (i, str(exc))) from exc
-
-        targets.append(
-            NolTarget(
-                grade=str(grade),
-                consecutive=consecutive,
-                region=_parse_region(item.get("region")),
-            )
-        )
+        targets.append(_parse_nol_target(item, i))
 
     poll = _parse_nol_poll(data.get("poll"))
     return targets, poll
+
+
+def _parse_nol_target(item: dict, index: int) -> NolTarget:
+    """nol target 항목 하나(grade/section/rows/consecutive 모두 선택)를 검증해
+    NolTarget으로 변환한다.
+    """
+    grade_raw = item.get("grade")
+    grade = str(grade_raw) if grade_raw is not None else None
+
+    section_raw = item.get("section")
+    section = str(section_raw) if section_raw is not None else None
+
+    rows = _parse_nol_rows(item.get("rows"), index)
+
+    try:
+        consecutive = int(item.get("consecutive", 1))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("invalid nol target %d: %s" % (index, str(exc))) from exc
+
+    return NolTarget(grade=grade, section=section, rows=rows, consecutive=consecutive)
+
+
+def _parse_nol_rows(rows_raw: object, index: int) -> list[int] | None:
+    """target의 rows 목록을 검증해 list[int] 또는 None으로 변환한다."""
+    if rows_raw is None:
+        return None
+    if not isinstance(rows_raw, list):
+        raise ConfigError("nol target %d: rows must be a list" % index)
+    try:
+        return [int(r) for r in rows_raw]
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            "nol target %d: rows must be a list of ints: %s" % (index, str(exc))
+        ) from exc

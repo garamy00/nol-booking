@@ -30,10 +30,9 @@ ENV_OK = """
 NOL_TARGETS_OK = """
     targets:
       - grade: "R석"
+        section: "A"
+        rows: [15, 16]
         consecutive: 2
-        region:
-          cx_min: 0
-          cx_max: 140
     poll:
       interval_min: 30
       interval_max: 60
@@ -53,9 +52,9 @@ def test_load_nol_config_parses_all_sections(tmp_path):
     assert cfg.telegram.token == "tok123"
     assert cfg.telegram.chat_id == "chat456"
     assert cfg.targets[0].grade == "R석"
+    assert cfg.targets[0].section == "A"
+    assert cfg.targets[0].rows == [15, 16]
     assert cfg.targets[0].consecutive == 2
-    assert cfg.targets[0].region.cx_min == 0
-    assert cfg.targets[0].region.cx_max == 140
     assert cfg.poll.interval_min == 30
     assert cfg.poll.interval_max == 60
 
@@ -87,23 +86,15 @@ def test_consecutive_defaults_to_one(tmp_path):
     env_path, nol_targets_path = _write(tmp_path, ENV_OK, nol_targets)
     cfg = load_nol_config(env_path, nol_targets_path)
     assert cfg.targets[0].consecutive == 1
+    assert cfg.targets[0].section is None
+    assert cfg.targets[0].rows is None
 
 
-def test_region_parsed_when_present(tmp_path):
-    env_path, nol_targets_path = _write(tmp_path, ENV_OK, NOL_TARGETS_OK)
-    cfg = load_nol_config(env_path, nol_targets_path)
-    assert cfg.targets[0].region.cx_min == 0
-    assert cfg.targets[0].region.cx_max == 140
-    assert cfg.targets[0].region.cy_min is None
-    assert cfg.targets[0].region.cy_max is None
-
-
-def test_region_none_when_absent(tmp_path):
+def test_all_target_fields_optional_except_consecutive(tmp_path):
     nol_targets = textwrap.dedent(
         """
         targets:
-          - grade: "R석"
-            consecutive: 2
+          - consecutive: 3
         poll:
           interval_min: 30
           interval_max: 60
@@ -111,14 +102,50 @@ def test_region_none_when_absent(tmp_path):
     )
     env_path, nol_targets_path = _write(tmp_path, ENV_OK, nol_targets)
     cfg = load_nol_config(env_path, nol_targets_path)
-    assert cfg.targets[0].region is None
+    assert cfg.targets[0].grade is None
+    assert cfg.targets[0].section is None
+    assert cfg.targets[0].rows is None
+    assert cfg.targets[0].consecutive == 3
 
 
-def test_target_missing_grade_raises_configerror(tmp_path):
+def test_rows_bad_type_raises_configerror(tmp_path):
     nol_targets = textwrap.dedent(
         """
         targets:
-          - consecutive: 2
+          - grade: "R석"
+            rows: "15,16"
+        poll:
+          interval_min: 30
+          interval_max: 60
+        """
+    )
+    env_path, nol_targets_path = _write(tmp_path, ENV_OK, nol_targets)
+    with pytest.raises(ConfigError):
+        load_nol_config(env_path, nol_targets_path)
+
+
+def test_rows_with_non_int_element_raises_configerror(tmp_path):
+    nol_targets = textwrap.dedent(
+        """
+        targets:
+          - grade: "R석"
+            rows: ["열다섯"]
+        poll:
+          interval_min: 30
+          interval_max: 60
+        """
+    )
+    env_path, nol_targets_path = _write(tmp_path, ENV_OK, nol_targets)
+    with pytest.raises(ConfigError):
+        load_nol_config(env_path, nol_targets_path)
+
+
+def test_consecutive_bad_type_raises_configerror(tmp_path):
+    nol_targets = textwrap.dedent(
+        """
+        targets:
+          - grade: "R석"
+            consecutive: "two"
         poll:
           interval_min: 30
           interval_max: 60

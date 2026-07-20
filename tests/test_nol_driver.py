@@ -1,7 +1,7 @@
 import pytest
 
 from config import NolAppConfig, NolConfig, NolTarget, PollConfig, TelegramConfig
-from nol_driver import circle_to_seat, parse_remaining, to_ampm
+from nol_driver import parse_remaining, to_ampm
 from nol_monitor import check_once
 from nol_seats import NolSeat
 from state import SeatState
@@ -40,25 +40,6 @@ def test_parse_remaining_missing_pattern_returns_none():
     assert parse_remaining("2026.08.02(일) 2:00 PM VIP석 73") is None
 
 
-# circle_to_seat
-
-
-def test_circle_to_seat_known_grade_returns_seat_with_float_coords():
-    raw = {
-        "id": "seat_block_26005135:22000526:023:91",
-        "fill": "#17b3ff",
-        "cx": "131.291",
-        "cy": "61.763",
-    }
-    seat = circle_to_seat(raw)
-    assert seat == NolSeat(seat_id=raw["id"], grade="R석", cx=131.291, cy=61.763)
-
-
-def test_circle_to_seat_grey_sold_out_returns_none():
-    raw = {"id": "seat_block_x", "fill": "#edeff3", "cx": "10", "cy": "20"}
-    assert circle_to_seat(raw) is None
-
-
 # check_once (nol_monitor)
 
 
@@ -89,8 +70,8 @@ def _cfg(consecutive=2):
 def test_check_once_notifies_new_consecutive_group():
     sent = []
     seats = [
-        NolSeat(seat_id="s1", grade="R석", cx=131.291, cy=61.763),
-        NolSeat(seat_id="s2", grade="R석", cx=134.291, cy=61.763),
+        NolSeat(section="A", row=15, number=5, grade="R석", seat_id="s1"),
+        NolSeat(section="A", row=15, number=6, grade="R석", seat_id="s2"),
     ]
     driver = FakeDriver(seats)
     fresh = check_once(driver, _cfg(), SeatState(), notify=sent.append)
@@ -109,8 +90,8 @@ def test_check_once_no_seats_returns_empty_and_no_notify():
 def test_check_once_same_group_twice_notifies_once():
     sent = []
     seats = [
-        NolSeat(seat_id="s1", grade="R석", cx=131.291, cy=61.763),
-        NolSeat(seat_id="s2", grade="R석", cx=134.291, cy=61.763),
+        NolSeat(section="A", row=15, number=5, grade="R석", seat_id="s1"),
+        NolSeat(section="A", row=15, number=6, grade="R석", seat_id="s2"),
     ]
     state = SeatState()
     cfg = _cfg()
