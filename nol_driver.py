@@ -41,6 +41,11 @@ CALENDAR_SETTLE_SEC = 0.5
 # 월 이동 클릭 무한루프 방지 상한
 MAX_MONTH_ADVANCE = 12
 
+# 토글 리로드가 SPA 리렌더로 인한 일시적 실패(stale element 등)로 깨질 때,
+# 곧바로 완전 재진입하지 않고 제자리에서 재시도하는 횟수·간격
+RELOAD_RETRIES = 3
+RELOAD_RETRY_WAIT_SEC = 1.0
+
 _REMAINING_STRIP_RE = re.compile(r"\s+")
 _REMAINING_RE = re.compile(r"좌석선택시간(\d+):(\d+)")
 
@@ -553,9 +558,28 @@ class NolDriver:
         self._wait.until(lambda d: d.find_elements(By.CSS_SELECTOR, "circle.js-seat"))
 
     def reload_target(self) -> None:
-        """TOGGLE 날짜/시간으로 갔다가 TARGET으로 복귀해 좌석맵을 리로드한다."""
-        self.change_schedule(self._cfg.toggle_date, self._cfg.toggle_time)
-        self.change_schedule(self._cfg.date, self._cfg.time)
+        """TOGGLE 날짜/시간으로 갔다가 TARGET으로 복귀해 좌석맵을 리로드한다.
+
+        일정변경 레이어 조작은 SPA 리렌더로 인한 일시적 실패(stale element 등)가
+        간헐적으로 발생하므로, 제자리에서 몇 번 재시도한다. 재시도까지 모두
+        실패해야 예외를 올려 호출부가 완전 재진입으로 폴백하게 한다.
+        """
+        last_exc: DriverError | None = None
+        for attempt in range(1, RELOAD_RETRIES + 1):
+            try:
+                self.change_schedule(self._cfg.toggle_date, self._cfg.toggle_time)
+                self.change_schedule(self._cfg.date, self._cfg.time)
+                return
+            except DriverError as exc:
+                last_exc = exc
+                logger.warning(
+                    "reload_target attempt %d/%d failed: %s; retrying",
+                    attempt,
+                    RELOAD_RETRIES,
+                    exc,
+                )
+                time.sleep(RELOAD_RETRY_WAIT_SEC)
+        raise last_exc
 
     def reenter(self) -> None:
         """세션 만료 후 goods 페이지부터 예매창 진입을 다시 수행한다."""
