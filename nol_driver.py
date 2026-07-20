@@ -352,19 +352,26 @@ class NolDriver:
         return seats
 
     def remaining_seconds(self) -> int | None:
-        """scheduleCard의 남은 좌석 선택 시간을 초 단위로 반환한다(없으면 None)."""
+        """SessionDwellTimer의 남은 좌석 선택 시간을 초 단위로 반환한다(없으면 None).
+
+        타이머 텍스트는 "좌석 선택 시간 2 : 3 1"처럼 숫자 사이에 공백이 끼므로
+        parse_remaining이 공백을 제거해 파싱한다.
+        """
         self._require_attached()
+        # Selenium의 .text는 이 SPA 타이머 요소에서 빈 값을 주는 경우가 있어
+        # execute_script의 innerText로 직접 읽는다.
         try:
-            text = self._driver.find_element(
-                By.CSS_SELECTOR, "[class*=scheduleCard]"
-            ).text
-        except NoSuchElementException:
-            logger.warning("scheduleCard not found; cannot read remaining time")
-            return None
+            text = self._driver.execute_script(
+                "const e = document.querySelector('[class*=SessionDwellTimer]');"
+                "return e ? (e.innerText || e.textContent || '') : null;"
+            )
         except WebDriverException as exc:
             raise DriverError(
-                "failed to read scheduleCard: %s" % type(exc).__name__
+                "failed to read session timer: %s" % type(exc).__name__
             ) from exc
+        if not text:
+            logger.debug("SessionDwellTimer not found; cannot read remaining time")
+            return None
         return parse_remaining(text)
 
     def change_schedule(self, date: str, time_hhmm: str) -> None:

@@ -29,7 +29,9 @@ def parse_rowno(row_no: str) -> tuple[str, int] | None:
     """
     match = _ROWNO_RE.match(row_no.strip())
     if match is None:
-        logger.warning("unparseable rowNo: %s", row_no)
+        # 박스석("BOX 1" 등)은 "N열" 구조가 없어 정상적으로 파싱 대상에서 빠진다.
+        # 폴링마다 반복되므로 경고가 아닌 debug로 남긴다.
+        logger.debug("skipping seat with non-row rowNo: %s", row_no)
         return None
 
     prefix = match.group("prefix").strip()
@@ -62,7 +64,7 @@ def parse_seat_meta(raw: dict) -> NolSeat | None:
     try:
         number = int(raw["seatNo"])
     except (KeyError, TypeError, ValueError):
-        logger.warning("unparseable seatNo: %s", raw.get("seatNo"))
+        logger.debug("skipping seat with non-integer seatNo: %s", raw.get("seatNo"))
         return None
 
     return NolSeat(
