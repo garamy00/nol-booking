@@ -8,7 +8,9 @@ attach하여 goods 페이지 진입 → 회차 선택 → 예매창(onestop/seat
 
 from __future__ import annotations
 
+import glob
 import logging
+import os
 import re
 import time
 
@@ -19,6 +21,7 @@ from selenium.common.exceptions import (
     WebDriverException,
 )
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -53,6 +56,27 @@ for (const c of circles) {
 }
 return result;
 """
+
+
+def _resolve_service() -> Service:
+    """Chrome 버전과 맞는 chromedriver로 Service를 만든다.
+
+    PATH에 구버전 chromedriver가 있으면 Selenium이 그것을 집어 현재 Chrome과
+    버전 충돌로 attach가 실패할 수 있다. 이를 피하기 위해 환경변수
+    CHROMEDRIVER_PATH가 있으면 그것을, 없으면 Selenium이 캐시해 둔 최신
+    chromedriver를 명시적으로 사용한다. 후보가 없으면 기본 해석에 맡긴다.
+    """
+    override = os.environ.get("CHROMEDRIVER_PATH")
+    if override:
+        return Service(executable_path=override)
+
+    cache_glob = os.path.expanduser(
+        "~/.cache/selenium/chromedriver/*/*/chromedriver"
+    )
+    candidates = sorted(glob.glob(cache_glob))
+    if candidates:
+        return Service(executable_path=candidates[-1])
+    return Service()
 
 
 def to_ampm(hhmm: str) -> str:
@@ -126,7 +150,7 @@ class NolDriver:
         options = Options()
         options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
         try:
-            driver = webdriver.Chrome(options=options)
+            driver = webdriver.Chrome(options=options, service=_resolve_service())
         except WebDriverException as exc:
             raise DriverError(
                 "cannot attach to Chrome on %s; is it running with "
@@ -274,14 +298,29 @@ class NolDriver:
             ) from exc
 
     def _wait_for_seat_page(self) -> None:
-        """URL이 onestop/seat를 포함할 때까지 대기한다."""
+        """URL 전환 + 좌석 SVG 렌더링 완료까지 대기한다.
+
+        URL이 onestop/seat로 바뀐 직후엔 React가 좌석 circle을 아직 그리지
+        않아 곧바로 읽으면 0석이 된다. circle.js-seat가 실제로 나타날 때까지
+        기다린다.
+        """
         try:
             self._wait.until(lambda d: SEAT_PAGE_MARKER in d.current_url)
+            self._wait_for_seats_rendered()
         except TimeoutException as exc:
             raise DriverError(
                 "enter_booking: seat page did not load within timeout (url=%s)"
                 % self._driver.current_url
             ) from exc
+
+    def _wait_for_seats_rendered(self) -> None:
+        """좌석 circle.js-seat가 하나 이상 렌더링될 때까지 대기한다."""
+        self._wait.until(
+            lambda d: d.execute_script(
+                "return document.querySelectorAll('circle.js-seat').length;"
+            )
+            > 0
+        )
 
     def read_available_seats(self) -> list[NolSeat]:
         """예매창 SVG에서 가용 좌석(circle.js-seat, disabled 제외) 목록을 읽는다.

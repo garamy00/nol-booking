@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 
 from config import NolAppConfig, load_nol_config
-from errors import AppBaseError
+from errors import AppBaseError, DriverError
 from nol_seats import NolSeatGroup, find_nol_groups
 from notifier import send_telegram
 from state import SeatState
@@ -20,6 +20,13 @@ NOL_TARGETS_PATH = "nol_targets.yaml"
 
 # 좌석 선택 세션(10분) 만료 전에 여유를 두고 재진입하기 위한 안전 마진
 SAFETY_SECONDS = 40
+
+# 페이지 타이머 텍스트를 못 읽을 때를 대비한 벽시계 기반 세션 상한(초).
+# 실제 제한(10분)보다 넉넉히 앞서 재진입해 만료로 인한 실패를 피한다.
+MAX_SESSION_SECONDS = 9 * 60
+
+# 예매창 진입 실패 시 재시도 전 대기(초)
+REENTRY_BACKOFF_SECONDS = 30
 
 
 def check_once(
@@ -48,35 +55,76 @@ def _sleep_with_jitter(cfg: NolAppConfig) -> None:
     time.sleep(delay)
 
 
+def _is_session_expiring(driver, session_start: float) -> bool:
+    """페이지 타이머(가능하면) 또는 벽시계 상한으로 세션 만료 임박을 판단한다."""
+    elapsed = time.monotonic() - session_start
+    if elapsed > MAX_SESSION_SECONDS:
+        logger.info("Session wall-clock limit reached (%.0fs); re-entering", elapsed)
+        return True
+
+    rem = driver.remaining_seconds()
+    if rem is not None and rem < SAFETY_SECONDS:
+        logger.info("Session timer low (remaining=%ss); re-entering", rem)
+        return True
+
+    return False
+
+
 def _poll_until_hold_or_expiry(
     driver, cfg: NolAppConfig, state: SeatState, notify: Callable[[str], None]
 ) -> bool:
     """안쪽 루프: 세션 만료 전까지 좌석 확인 → 없으면 토글 리로드 후 재시도.
 
+    좌석 읽기·토글 중 DriverError가 나면 세션이 유실된 것으로 보고 재진입을
+    요청한다(타이머 텍스트가 안 보여도 만료를 사후 감지할 수 있게 한다).
+
     Returns:
-        True면 타깃 좌석을 찾아 홀드해야 함. False면 세션 만료로 재진입 필요.
+        True면 타깃 좌석을 찾아 홀드해야 함. False면 세션 만료·유실로 재진입 필요.
     """
+    session_start = time.monotonic()
     while True:
-        rem = driver.remaining_seconds()
-        if rem is not None and rem < SAFETY_SECONDS:
-            logger.info("Session expiring (remaining=%ss); re-entering", rem)
+        if _is_session_expiring(driver, session_start):
             return False
 
-        fresh = check_once(driver, cfg, state, notify)
-        if fresh:
-            logger.info("HOLD: target seat found, monitor paused on seat page")
-            return True
+        try:
+            fresh = check_once(driver, cfg, state, notify)
+            if fresh:
+                logger.info("HOLD: target seat found, monitor paused on seat page")
+                return True
+            driver.reload_target()
+        except DriverError as exc:
+            logger.warning(
+                "Seat check/reload failed (%s); assuming session lost, re-entering",
+                type(exc).__name__,
+            )
+            return False
 
-        driver.reload_target()
         _sleep_with_jitter(cfg)
 
 
 def _run_loop(
     driver, cfg: NolAppConfig, state: SeatState, notify: Callable[[str], None]
 ) -> None:
-    """바깥 루프: 예매창 재진입 → 안쪽 폴링. 타깃 발견 시 홀드하고 반환한다."""
+    """바깥 루프: 예매창 (재)진입 → 안쪽 폴링. 타깃 발견 시 홀드하고 반환한다."""
+    first = True
     while True:
-        driver.enter_booking()
+        # 첫 진입은 enter_booking, 이후엔 goods로 되돌아가 새 세션으로 재진입
+        try:
+            if first:
+                driver.enter_booking()
+                first = False
+            else:
+                driver.reenter()
+        except DriverError as exc:
+            logger.error(
+                "Booking entry failed (%s); retrying in %ds",
+                type(exc).__name__,
+                REENTRY_BACKOFF_SECONDS,
+            )
+            notify("[NOL] 예매창 진입 실패: %s (재시도)" % type(exc).__name__)
+            time.sleep(REENTRY_BACKOFF_SECONDS)
+            continue
+
         held = _poll_until_hold_or_expiry(driver, cfg, state, notify)
         if held:
             return
