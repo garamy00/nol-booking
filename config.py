@@ -1,5 +1,7 @@
 """설정 로딩: .env(INI) + targets.yaml → AppConfig."""
 
+from __future__ import annotations
+
 import configparser
 from dataclasses import dataclass, field
 
@@ -42,7 +44,7 @@ class AppConfig:
     ntok: NtokConfig
     telegram: TelegramConfig
     targets: list[Target] = field(default_factory=list)
-    poll: PollConfig = None
+    poll: PollConfig | None = None
 
 
 def _strip_quotes(value: str) -> str:
@@ -100,20 +102,57 @@ def _load_targets(targets_path: str) -> tuple[list[Target], PollConfig]:
     if not data or "targets" not in data or "poll" not in data:
         raise ConfigError("targets file must contain 'targets' and 'poll'")
 
-    targets: list[Target] = []
-    for item in data["targets"]:
-        targets.append(
-            Target(
-                floor=str(item["floor"]),
-                section=str(item["section"]),
-                rows=[int(r) for r in item["rows"]],
-                consecutive=int(item.get("consecutive", 1)),
-            )
-        )
+    targets_raw = data["targets"]
+    if not isinstance(targets_raw, list) or len(targets_raw) == 0:
+        raise ConfigError("targets must be a non-empty list")
 
-    poll_raw = data["poll"]
-    poll = PollConfig(
-        interval_min=int(poll_raw["interval_min"]),
-        interval_max=int(poll_raw["interval_max"]),
-    )
+    targets: list[Target] = []
+    for i, item in enumerate(targets_raw):
+        try:
+            if not isinstance(item, dict):
+                raise ConfigError("target item %d is not a dictionary" % i)
+            floor = item.get("floor")
+            if floor is None:
+                raise ConfigError("target %d missing required key: floor" % i)
+            section = item.get("section")
+            if section is None:
+                raise ConfigError("target %d missing required key: section" % i)
+            rows_raw = item.get("rows")
+            if rows_raw is None:
+                raise ConfigError("target %d missing required key: rows" % i)
+            targets.append(
+                Target(
+                    floor=str(floor),
+                    section=str(section),
+                    rows=[int(r) for r in rows_raw],
+                    consecutive=int(item.get("consecutive", 1)),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, ConfigError):
+                raise
+            raise ConfigError(
+                "invalid target %d: %s" % (i, str(exc))
+            ) from exc
+
+    poll_raw = data.get("poll")
+    if poll_raw is None:
+        raise ConfigError("poll configuration missing")
+
+    try:
+        interval_min_val = poll_raw.get("interval_min")
+        if interval_min_val is None:
+            raise ConfigError("poll missing required key: interval_min")
+        interval_max_val = poll_raw.get("interval_max")
+        if interval_max_val is None:
+            raise ConfigError("poll missing required key: interval_max")
+        poll = PollConfig(
+            interval_min=int(interval_min_val),
+            interval_max=int(interval_max_val),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, ConfigError):
+            raise
+        raise ConfigError("invalid poll configuration: %s" % str(exc)) from exc
+
     return targets, poll

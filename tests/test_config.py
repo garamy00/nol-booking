@@ -65,3 +65,115 @@ def test_consecutive_defaults_to_one(tmp_path):
     env_path, targets_path = _write(tmp_path, ENV_OK, targets)
     cfg = load_config(env_path, targets_path)
     assert cfg.targets[0].consecutive == 1
+
+
+def test_empty_targets_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets: []
+    poll:
+      interval_min: 30
+      interval_max: 60
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
+def test_target_missing_floor_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - section: "B"
+        rows: [1, 2, 3]
+    poll:
+      interval_min: 30
+      interval_max: 60
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
+def test_target_missing_section_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - floor: "1F"
+        rows: [1, 2, 3]
+    poll:
+      interval_min: 30
+      interval_max: 60
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
+def test_target_missing_rows_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - floor: "1F"
+        section: "B"
+    poll:
+      interval_min: 30
+      interval_max: 60
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
+def test_poll_missing_interval_min_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - floor: "1F"
+        section: "B"
+        rows: [1, 2, 3]
+    poll:
+      interval_max: 60
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
+def test_poll_missing_interval_max_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - floor: "1F"
+        section: "B"
+        rows: [1, 2, 3]
+    poll:
+      interval_min: 30
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
+def test_non_integer_rows_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - floor: "1F"
+        section: "B"
+        rows: ["a", "b", "c"]
+    poll:
+      interval_min: 30
+      interval_max: 60
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
+
+
+def test_non_integer_interval_min_raises_configerror(tmp_path):
+    targets_yaml = """
+    targets:
+      - floor: "1F"
+        section: "B"
+        rows: [1, 2, 3]
+    poll:
+      interval_min: "thirty"
+      interval_max: 60
+    """
+    env_path, targets_path = _write(tmp_path, ENV_OK, targets_yaml)
+    with pytest.raises(ConfigError):
+        load_config(env_path, targets_path)
