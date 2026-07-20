@@ -19,8 +19,11 @@ logger = logging.getLogger(__name__)
 # 행(같은 cy) 판별 허용 오차
 CY_TOL = 2.0
 
-# 행 내 인접 판별용 기본 임계값 (동적 임계값을 계산할 수 없을 때의 폴백)
+# 인접 판별용 기본 임계값 (좌석 피치를 추정할 표본이 부족할 때의 폴백)
 DEFAULT_ADJ = 6.0
+
+# 좌석 피치 추정에 필요한 최소 간격 표본 수 (미만이면 DEFAULT_ADJ로 폴백)
+MIN_GAP_SAMPLES = 3
 
 # 등급별 fill 색상 (소문자 #rrggbb 정규화 기준)
 GRADE_COLORS: dict[str, str] = {
@@ -107,42 +110,58 @@ def _seat_in_region(seat: NolSeat, region: Region | None) -> bool:
 
 
 def _group_by_row(seats: list[NolSeat]) -> list[list[NolSeat]]:
-    """cy 기준으로 정렬 후 CY_TOL 이내 좌석을 같은 행으로 묶는다."""
+    """cy 기준으로 정렬 후 행 기준(첫 좌석) cy와 CY_TOL 이내인 좌석을 같은 행으로 묶는다.
+
+    WHY: 직전 좌석과만 비교하면 작은 step이 누적돼 한 행의 cy 폭이
+    CY_TOL을 훨씬 초과할 수 있다(체인 드리프트). cy로 정렬되어 있으므로
+    행의 첫 좌석(기준)과 비교하면 행의 cy 폭이 항상 CY_TOL 이내로 제한된다.
+    """
     ordered = sorted(seats, key=lambda seat: seat.cy)
     rows: list[list[NolSeat]] = []
     for seat in ordered:
-        if rows and seat.cy - rows[-1][-1].cy <= CY_TOL:
+        if rows and seat.cy - rows[-1][0].cy <= CY_TOL:
             rows[-1].append(seat)
         else:
             rows.append([seat])
     return rows
 
 
-def _adjacency_threshold(row: list[NolSeat]) -> float:
-    """행 내 인접 판별 임계값을 동적으로 계산한다.
+def _row_gaps(row: list[NolSeat]) -> list[float]:
+    """행 내 cx 정렬 후 연속 좌석 간 양수 간격 목록을 반환한다.
 
-    WHY: 좌석 간격은 좁고 통로는 넓어, 행 내 중앙값 간격의 1.5배를
-    인접 임계로 쓴다. 이렇게 하면 좌석맵의 좌표 스케일이 달라져도
-    적응적으로 동작한다.
+    NOTE: 이 프로젝트의 실행 인터프리터가 3.9라 itertools.pairwise(3.10+)를
+    쓸 수 없어 인덱스 기반으로 구현한다.
     """
-    gaps = [
-        row[i + 1].cx - row[i].cx
-        for i in range(len(row) - 1)
-        if row[i + 1].cx - row[i].cx > 0
+    ordered = sorted(row, key=lambda seat: seat.cx)
+    return [
+        ordered[i + 1].cx - ordered[i].cx
+        for i in range(len(ordered) - 1)
+        if ordered[i + 1].cx - ordered[i].cx > 0
     ]
-    if not gaps:
+
+
+def _seat_pitch_threshold(rows: list[list[NolSeat]]) -> float:
+    """타깃(등급+영역 필터 결과) 전체 행에서 좌석 피치를 추정해 인접 임계값을 계산한다.
+
+    WHY: 좌석 간격은 좌석맵 전체에서 거의 일정하고 통로 간격만 크다.
+    행 하나만 보면 좌석이 2개뿐일 때 간격이 통로여도 "중앙값"이 그
+    간격 자체가 되어버려 통로를 인접으로 오판한다(임계값 degenerate).
+    타깃 전체 행의 간격을 모아 중앙값을 구하면 좌석 피치의 안정적인
+    추정치가 되어 이 문제를 피한다. 표본이 부족(3개 미만)하면 스케일을
+    신뢰할 수 없으므로 절대 기본값(DEFAULT_ADJ)으로 대체한다.
+    """
+    all_gaps = [gap for row in rows for gap in _row_gaps(row)]
+    if len(all_gaps) < MIN_GAP_SAMPLES:
         return DEFAULT_ADJ
-    return 1.5 * statistics.median(gaps)
+    return 1.5 * statistics.median(all_gaps)
 
 
-def _runs_in_row(row: list[NolSeat]) -> list[tuple[NolSeat, ...]]:
+def _runs_in_row(row: list[NolSeat], threshold: float) -> list[tuple[NolSeat, ...]]:
     """행 내에서 cx 기준 정렬 후 인접 임계 이하로 이어지는 연속 구간을 뽑는다."""
     if not row:
         return []
 
     ordered = sorted(row, key=lambda seat: seat.cx)
-    threshold = _adjacency_threshold(ordered)
-
     runs: list[tuple[NolSeat, ...]] = []
     current = [ordered[0]]
     for seat in ordered[1:]:
@@ -174,9 +193,12 @@ def find_nol_groups(
             if seat.grade == target.grade and _seat_in_region(seat, target.region)
         ]
 
-        # 행별로 묶은 뒤, 행마다 인접 연속 구간을 찾아 consecutive 이상만 채택
-        for row in _group_by_row(filtered):
-            for run in _runs_in_row(row):
+        # 행별로 묶고, 타깃 전체 행에서 좌석 피치를 추정해 단일 임계값을 구한 뒤
+        # 행마다 인접 연속 구간을 찾아 consecutive 이상만 채택
+        rows = _group_by_row(filtered)
+        threshold = _seat_pitch_threshold(rows)
+        for row in rows:
+            for run in _runs_in_row(row, threshold):
                 if len(run) >= target.consecutive:
                     groups.append(NolSeatGroup(grade=target.grade, seats=run))
 
