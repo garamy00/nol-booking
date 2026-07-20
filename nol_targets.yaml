@@ -1,9 +1,11 @@
+# NOL 좌석 감시 타깃.
+# 예매창 좌석 데이터에서 등급·구역·열·번호를 읽어 정밀 매칭한다.
+# grade / section / rows 는 모두 선택 항목이며, 지정한 것만 필터로 적용된다.
 targets:
-  - grade: "R석"
-    consecutive: 2
-    # region:            # (선택) 좌표 영역 제한. 생략 시 전체 좌석맵
-    #   cx_min: 0
-    #   cx_max: 140
+  - grade: "VIP석"        # (선택) VIP석 / OP석 / R석 / S석 / A석. 생략 시 모든 등급
+    consecutive: 2        # 나란히 붙은 좌석 N석 (2 = 2연석)
+    # section: "A"        # (선택) A / B / C 등 구역. 생략 시 모든 구역
+    # rows: [15, 16]      # (선택) 감시할 열 번호 목록. 생략 시 모든 열
 poll:
-  interval_min: 30
-  interval_max: 60
+  interval_min: 30        # 폴링 주기(초) 하한
+  interval_max: 60        # 상한 (이 사이 랜덤 지터)
