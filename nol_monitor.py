@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import logging
+import os
 import random
 import time
 from collections.abc import Callable
@@ -17,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 ENV_PATH = ".env"
 NOL_TARGETS_PATH = "nol_targets.yaml"
+
+# 단일 인스턴스 잠금 파일(스크립트 위치 기준). 중복 실행 시 두 번째는 종료.
+LOCK_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".nol_monitor.lock"
+)
 
 # 좌석 선택 세션(10분) 만료 전에 여유를 두고 재진입하기 위한 안전 마진
 SAFETY_SECONDS = 40
@@ -158,6 +165,22 @@ def _run_loop(
         held = _poll_until_hold_or_expiry(driver, cfg, state, notify)
         if held:
             return
+
+
+def acquire_single_instance_lock(lock_path: str = LOCK_PATH):
+    """단일 인스턴스 잠금을 시도한다.
+
+    fcntl.flock(비블로킹)으로 배타 잠금을 잡는다. 이미 다른 인스턴스가 잡았으면
+    None을 반환한다. 반환된 파일 객체는 프로세스 수명 동안 열어 두어야 잠금이
+    유지된다(닫으면 해제).
+    """
+    lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_file.close()
+        return None
+    return lock_file
 
 
 def main() -> None:
