@@ -303,6 +303,7 @@ def _collect_run_loop_notifications(driver, monkeypatch) -> list[str]:
     # 진입 성공 즉시 홀드로 처리해 바깥 루프를 종료시킨다
     monkeypatch.setattr(nol_monitor, "_poll_until_hold_or_expiry", lambda *a: True)
     monkeypatch.setattr(nol_monitor.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(ControlState, "wait_for_stop", lambda self, t: False)
     nol_monitor._run_loop(driver, _cfg(), SeatState(), sent.append, control)
     return sent
 

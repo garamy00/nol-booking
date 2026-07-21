@@ -51,6 +51,17 @@ def test_wait_if_paused_unblocks_after_resume():
     assert result["returned"] is True
 
 
+def test_wait_for_stop_returns_true_when_stopped():
+    c = ControlState("20260802", "14:00")
+    c.request_stop()
+    assert c.wait_for_stop(0.01) is True
+
+
+def test_wait_for_stop_returns_false_on_timeout():
+    c = ControlState("20260802", "14:00")
+    assert c.wait_for_stop(0.01) is False
+
+
 def test_mark_failure_accumulates_and_success_resets():
     c = ControlState("20260802", "14:00")
     assert c.mark_failure() == 1

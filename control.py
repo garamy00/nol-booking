@@ -64,6 +64,10 @@ class ControlState:
         while self._paused.is_set() and not self._stop.is_set():
             time.sleep(poll)
 
+    def wait_for_stop(self, timeout: float) -> bool:
+        """timeout초 동안 종료 요청을 기다린다. 요청되면 즉시 True, 아니면 False."""
+        return self._stop.wait(timeout)
+
     def set_state(self, state: str) -> None:
         """표시용 상태 문자열을 설정한다(entering/polling/paused/holding)."""
         with self._lock:

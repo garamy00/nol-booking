@@ -73,11 +73,11 @@ def check_once(
     return fresh
 
 
-def _sleep_with_jitter(cfg: NolAppConfig) -> None:
-    """폴링 간격을 지터를 섞어 대기한다(봇 탐지 완화)."""
+def _sleep_with_jitter(cfg: NolAppConfig, control) -> None:
+    """폴링 간격을 지터를 섞어 대기한다(봇 탐지 완화). 종료 요청 시 즉시 반환."""
     delay = random.uniform(cfg.poll.interval_min, cfg.poll.interval_max)
     logger.debug("Sleeping %.1fs before next poll", delay)
-    time.sleep(delay)
+    control.wait_for_stop(delay)
 
 
 def _is_session_expiring(driver, session_start: float) -> bool:
@@ -125,7 +125,7 @@ def _poll_until_hold_or_expiry(
             return False
 
         control.mark_success()
-        _sleep_with_jitter(cfg)
+        _sleep_with_jitter(cfg, control)
 
     return False
 
@@ -159,7 +159,7 @@ def _run_loop(
             # 자가복구되는 일시적 실패는 알리지 않고, 임계 도달 시 한 번만 알린다
             if count == FAILURE_ALERT_THRESHOLD:
                 notify("[NOL] 예매창 진입이 %d회 연속 실패했습니다 (확인 필요)" % count)
-            time.sleep(REENTRY_BACKOFF_SECONDS)
+            control.wait_for_stop(REENTRY_BACKOFF_SECONDS)
             continue
 
         # 진입 성공: 지속 장애를 알렸던 경우에만 복구 알림 후 카운터 초기화
@@ -184,7 +184,7 @@ def acquire_single_instance_lock(lock_path: str = LOCK_PATH) -> TextIO | None:
     lock_file = open(lock_path, "w")
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except BlockingIOError:
         lock_file.close()
         return None
     return lock_file
