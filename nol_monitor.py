@@ -8,6 +8,7 @@ import os
 import random
 import time
 from collections.abc import Callable
+from typing import TextIO
 
 from config import NolAppConfig, load_nol_config
 from errors import AppBaseError, DriverError
@@ -167,7 +168,7 @@ def _run_loop(
             return
 
 
-def acquire_single_instance_lock(lock_path: str = LOCK_PATH):
+def acquire_single_instance_lock(lock_path: str = LOCK_PATH) -> TextIO | None:
     """단일 인스턴스 잠금을 시도한다.
 
     fcntl.flock(비블로킹)으로 배타 잠금을 잡는다. 이미 다른 인스턴스가 잡았으면
