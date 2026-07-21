@@ -17,6 +17,7 @@ import time
 from selenium import webdriver
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
+    ElementNotInteractableException,
     NoSuchElementException,
     TimeoutException,
     WebDriverException,
@@ -209,6 +210,26 @@ class NolDriver:
                 "could not ensure desktop window size: %s", type(exc).__name__
             )
 
+    def _safe_click(self, element) -> None:
+        """요소를 화면 안으로 스크롤한 뒤 클릭한다(가로막힘/미상호작용 폴백 포함).
+
+        환경(Chromium·RDP 등)에 따라 요소가 뷰포트 밖이거나 레이어 애니메이션·
+        오버레이에 순간적으로 가려 네이티브 click이 ElementClickIntercepted·
+        ElementNotInteractable로 실패한다. scrollIntoView로 화면에 넣고
+        클릭하되, 그래도 막히면 이벤트를 직접 디스패치(JS click)해 통과시킨다.
+        """
+        self._driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});", element
+        )
+        try:
+            element.click()
+        except (
+            ElementClickInterceptedException,
+            ElementNotInteractableException,
+        ):
+            logger.warning("native click blocked; falling back to JS click")
+            self._driver.execute_script("arguments[0].click();", element)
+
     def _find_interpark_window(self, driver) -> str | None:
         """모든 창을 순회해 interpark.com 창으로 전환하고 URL을 반환한다."""
         for handle in driver.window_handles:
@@ -288,7 +309,7 @@ class NolDriver:
             )
             if days and days[0].is_displayed():
                 return
-            self._driver.find_element(By.CSS_SELECTOR, ".sideToggleBtn").click()
+            self._safe_click(self._driver.find_element(By.CSS_SELECTOR, ".sideToggleBtn"))
             self._wait.until(
                 lambda d: d.find_elements(By.CSS_SELECTOR, "ul[data-view='days'] > li")
             )
@@ -307,9 +328,11 @@ class NolDriver:
                 ).text.strip()
                 if current == target_label:
                     return
-                self._driver.find_element(
-                    By.CSS_SELECTOR, "li[data-view='month next']"
-                ).click()
+                self._safe_click(
+                    self._driver.find_element(
+                        By.CSS_SELECTOR, "li[data-view='month next']"
+                    )
+                )
                 time.sleep(CALENDAR_SETTLE_SEC)
         except (NoSuchElementException, TimeoutException, WebDriverException) as exc:
             raise DriverError(
@@ -333,7 +356,7 @@ class NolDriver:
                 if "muted" in classes or "disabled" in classes:
                     continue
                 if cell.text.strip() == day_num:
-                    cell.click()
+                    self._safe_click(cell)
                     return
         except (NoSuchElementException, TimeoutException, WebDriverException) as exc:
             raise DriverError(
@@ -349,7 +372,7 @@ class NolDriver:
             for label in labels:
                 data_text = label.get_attribute("data-text") or ""
                 if time_hhmm in data_text:
-                    label.click()
+                    self._safe_click(label)
                     return
         except (NoSuchElementException, TimeoutException, WebDriverException) as exc:
             raise DriverError(
@@ -361,27 +384,18 @@ class NolDriver:
         )
 
     def _click_book_button(self) -> None:
-        """예매하기 버튼을 화면 안으로 스크롤한 뒤 클릭한다.
+        """예매하기 버튼을 클릭한다.
 
-        이 버튼(사이드 패널)은 페이지 하단이라 뷰포트 밖에 있을 수 있고, 그
-        상태의 네이티브 click은 클릭 지점이 없어 ElementClickInterceptedException
-        으로 실패한다. scrollIntoView로 화면 안에 넣고 클릭하되, 그래도
-        가로막히면 JS 클릭으로 폴백한다.
+        이 버튼(사이드 패널)은 페이지 하단이라 뷰포트 밖일 수 있어 _safe_click
+        으로 스크롤 후 클릭한다.
         """
         try:
             btn = self._driver.find_element(By.CSS_SELECTOR, "a.sideBtn.is-primary")
         except NoSuchElementException as exc:
             raise DriverError("enter_booking: book button not found") from exc
 
-        self._driver.execute_script(
-            "arguments[0].scrollIntoView({block:'center'});", btn
-        )
         try:
-            btn.click()
-        except ElementClickInterceptedException:
-            # 스크롤 후에도 가로막히면 이벤트를 직접 디스패치해 통과 클릭한다
-            logger.warning("book button intercepted after scroll; JS-clicking")
-            self._driver.execute_script("arguments[0].click();", btn)
+            self._safe_click(btn)
         except WebDriverException as exc:
             raise DriverError(
                 "enter_booking: failed to click book button: %s" % type(exc).__name__
@@ -491,7 +505,7 @@ class NolDriver:
                 (By.CSS_SELECTOR, "button[class*='SubHeader_layerDateButton']")
             )
         )
-        button.click()
+        self._safe_click(button)
         self._wait.until(
             EC.presence_of_element_located(
                 (By.CSS_SELECTOR, "[class*='LayerDate_container']")
@@ -528,7 +542,7 @@ class NolDriver:
                     "change_schedule: calendar navigation disabled before "
                     "reaching %s (at %s)" % (target_label, current)
                 )
-            btn.click()
+            self._safe_click(btn)
             time.sleep(CALENDAR_SETTLE_SEC)
         raise DriverError(
             "change_schedule: could not reach target month %s" % target_label
@@ -553,7 +567,7 @@ class NolDriver:
                 continue
             number_text = (numbers[0].get_attribute("textContent") or "").strip()
             if number_text == day_num:
-                button.click()
+                self._safe_click(button)
                 return
         raise DriverError(
             "change_schedule: day %s not found or not selectable in layer" % day_num
@@ -583,7 +597,7 @@ class NolDriver:
                 "change_schedule: time %s (%s) not found among time buttons"
                 % (time_hhmm, target)
             ) from exc
-        button.click()
+        self._safe_click(button)
 
     def _click_apply_button(self) -> None:
         """변경하기 버튼(EntButton_primary)을 클릭한다."""
@@ -596,7 +610,7 @@ class NolDriver:
                     raise DriverError(
                         "change_schedule: apply button (변경하기) is disabled"
                     )
-                button.click()
+                self._safe_click(button)
                 return
         raise DriverError("change_schedule: apply button (변경하기) not found")
 

@@ -28,6 +28,11 @@ MAX_SESSION_SECONDS = 9 * 60
 # 예매창 진입 실패 시 재시도 전 대기(초)
 REENTRY_BACKOFF_SECONDS = 30
 
+# 예매창 진입 실패는 재진입 과정에서 1~3회 발생 후 자가복구되는 일이 잦다.
+# 매 실패마다 알리면 텔레그램이 스팸이 되므로, 연속 실패가 이 임계에 도달해
+# 지속 장애로 판단될 때만 한 번 알린다.
+FAILURE_ALERT_THRESHOLD = 5
+
 
 def check_once(
     driver, cfg: NolAppConfig, state: SeatState, notify: Callable[[str], None]
@@ -117,6 +122,7 @@ def _run_loop(
 ) -> None:
     """바깥 루프: 예매창 (재)진입 → 안쪽 폴링. 타깃 발견 시 홀드하고 반환한다."""
     first = True
+    consecutive_failures = 0
     while True:
         # 첫 진입은 enter_booking, 이후엔 goods로 되돌아가 새 세션으로 재진입
         try:
@@ -126,16 +132,28 @@ def _run_loop(
             else:
                 driver.reenter()
         except DriverError as exc:
+            consecutive_failures += 1
             # 어느 단계에서 깨졌는지(캘린더/날짜/시각/예매버튼/좌석대기) 진단하려면
             # 예외 타입명이 아니라 단계·URL이 담긴 전체 메시지를 남겨야 한다
             logger.error(
-                "Booking entry failed (%s); retrying in %ds",
+                "Booking entry failed (%s); attempt %d, retrying in %ds",
                 exc,
+                consecutive_failures,
                 REENTRY_BACKOFF_SECONDS,
             )
-            notify("[NOL] 예매창 진입 실패: %s (재시도)" % type(exc).__name__)
+            # 자가복구되는 일시적 실패는 알리지 않고, 임계 도달 시 한 번만 알린다
+            if consecutive_failures == FAILURE_ALERT_THRESHOLD:
+                notify(
+                    "[NOL] 예매창 진입이 %d회 연속 실패했습니다 (확인 필요)"
+                    % consecutive_failures
+                )
             time.sleep(REENTRY_BACKOFF_SECONDS)
             continue
+
+        # 진입 성공: 지속 장애를 알렸던 경우에만 복구 알림 후 카운터를 초기화한다
+        if consecutive_failures >= FAILURE_ALERT_THRESHOLD:
+            notify("[NOL] 예매창 진입 복구됨")
+        consecutive_failures = 0
 
         held = _poll_until_hold_or_expiry(driver, cfg, state, notify)
         if held:
