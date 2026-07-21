@@ -6,6 +6,7 @@ from selenium.common.exceptions import (
 
 import nol_monitor
 from config import NolAppConfig, NolConfig, NolTarget, PollConfig, TelegramConfig
+from control import ControlState
 from errors import DriverError
 from nol_driver import NolDriver, parse_remaining, to_ampm
 from nol_monitor import check_once
@@ -298,10 +299,11 @@ class _FlakyEntryDriver:
 
 def _collect_run_loop_notifications(driver, monkeypatch) -> list[str]:
     sent: list[str] = []
+    control = ControlState("20260802", "14:00")
     # 진입 성공 즉시 홀드로 처리해 바깥 루프를 종료시킨다
     monkeypatch.setattr(nol_monitor, "_poll_until_hold_or_expiry", lambda *a: True)
     monkeypatch.setattr(nol_monitor.time, "sleep", lambda _s: None)
-    nol_monitor._run_loop(driver, _cfg(), SeatState(), notify=sent.append)
+    nol_monitor._run_loop(driver, _cfg(), SeatState(), sent.append, control)
     return sent
 
 
@@ -323,3 +325,27 @@ def test_run_loop_alerts_once_then_recovers_on_sustained_failure(monkeypatch):
     assert len(sent) == 2
     assert "실패" in sent[0]
     assert "복구" in sent[1]
+
+
+def test_run_loop_exits_immediately_when_stop_requested(monkeypatch):
+    # stop이 이미 요청되면 진입을 시도하지 않고 즉시 반환한다
+    calls = {"enter": 0}
+
+    class _Driver:
+        def enter_booking(self):
+            calls["enter"] += 1
+
+        def reenter(self):
+            calls["enter"] += 1
+
+    control = ControlState("20260802", "14:00")
+    control.request_stop()
+    nol_monitor._run_loop(_Driver(), _cfg(), SeatState(), lambda _t: None, control)
+    assert calls["enter"] == 0
+
+
+def test_signal_handler_requests_stop():
+    control = ControlState("20260802", "14:00")
+    handler = nol_monitor._request_stop_on_signal(control)
+    handler(15, None)
+    assert control.should_stop() is True

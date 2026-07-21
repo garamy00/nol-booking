@@ -6,6 +6,8 @@ import fcntl
 import logging
 import os
 import random
+import signal
+import threading
 import time
 from collections.abc import Callable
 from typing import TextIO
@@ -94,18 +96,18 @@ def _is_session_expiring(driver, session_start: float) -> bool:
 
 
 def _poll_until_hold_or_expiry(
-    driver, cfg: NolAppConfig, state: SeatState, notify: Callable[[str], None]
+    driver, cfg: NolAppConfig, state: SeatState, notify: Callable[[str], None], control
 ) -> bool:
     """안쪽 루프: 세션 만료 전까지 좌석 확인 → 없으면 토글 리로드 후 재시도.
 
-    좌석 읽기·토글 중 DriverError가 나면 세션이 유실된 것으로 보고 재진입을
-    요청한다(타이머 텍스트가 안 보여도 만료를 사후 감지할 수 있게 한다).
-
     Returns:
-        True면 타깃 좌석을 찾아 홀드해야 함. False면 세션 만료·유실로 재진입 필요.
+        True면 타깃 좌석을 찾아 홀드해야 함. False면 세션 만료·유실·종료로 재진입/종료.
     """
     session_start = time.monotonic()
-    while True:
+    while not control.should_stop():
+        control.wait_if_paused()
+        if control.should_stop():
+            return False
         if _is_session_expiring(driver, session_start):
             return False
 
@@ -122,16 +124,23 @@ def _poll_until_hold_or_expiry(
             )
             return False
 
+        control.mark_success()
         _sleep_with_jitter(cfg)
+
+    return False
 
 
 def _run_loop(
-    driver, cfg: NolAppConfig, state: SeatState, notify: Callable[[str], None]
+    driver, cfg: NolAppConfig, state: SeatState, notify: Callable[[str], None], control
 ) -> None:
-    """바깥 루프: 예매창 (재)진입 → 안쪽 폴링. 타깃 발견 시 홀드하고 반환한다."""
+    """바깥 루프: 예매창 (재)진입 → 안쪽 폴링. 타깃 발견 또는 종료 요청 시 반환한다."""
     first = True
-    consecutive_failures = 0
-    while True:
+    while not control.should_stop():
+        control.wait_if_paused()
+        if control.should_stop():
+            return
+        control.set_state("entering")
+
         # 첫 진입은 enter_booking, 이후엔 goods로 되돌아가 새 세션으로 재진입
         try:
             if first:
@@ -140,31 +149,28 @@ def _run_loop(
             else:
                 driver.reenter()
         except DriverError as exc:
-            consecutive_failures += 1
-            # 어느 단계에서 깨졌는지(캘린더/날짜/시각/예매버튼/좌석대기) 진단하려면
-            # 예외 타입명이 아니라 단계·URL이 담긴 전체 메시지를 남겨야 한다
+            count = control.mark_failure()
             logger.error(
                 "Booking entry failed (%s); attempt %d, retrying in %ds",
                 exc,
-                consecutive_failures,
+                count,
                 REENTRY_BACKOFF_SECONDS,
             )
             # 자가복구되는 일시적 실패는 알리지 않고, 임계 도달 시 한 번만 알린다
-            if consecutive_failures == FAILURE_ALERT_THRESHOLD:
-                notify(
-                    "[NOL] 예매창 진입이 %d회 연속 실패했습니다 (확인 필요)"
-                    % consecutive_failures
-                )
+            if count == FAILURE_ALERT_THRESHOLD:
+                notify("[NOL] 예매창 진입이 %d회 연속 실패했습니다 (확인 필요)" % count)
             time.sleep(REENTRY_BACKOFF_SECONDS)
             continue
 
-        # 진입 성공: 지속 장애를 알렸던 경우에만 복구 알림 후 카운터를 초기화한다
-        if consecutive_failures >= FAILURE_ALERT_THRESHOLD:
+        # 진입 성공: 지속 장애를 알렸던 경우에만 복구 알림 후 카운터 초기화
+        if control.snapshot().consecutive_failures >= FAILURE_ALERT_THRESHOLD:
             notify("[NOL] 예매창 진입 복구됨")
-        consecutive_failures = 0
+        control.mark_success()
+        control.set_state("polling")
 
-        held = _poll_until_hold_or_expiry(driver, cfg, state, notify)
+        held = _poll_until_hold_or_expiry(driver, cfg, state, notify, control)
         if held:
+            control.set_state("holding")
             return
 
 
@@ -184,18 +190,36 @@ def acquire_single_instance_lock(lock_path: str = LOCK_PATH) -> TextIO | None:
     return lock_file
 
 
+def _request_stop_on_signal(control):
+    """SIGTERM/SIGINT 수신 시 control에 종료를 요청하는 핸들러를 만든다."""
+
+    def handler(signum, frame) -> None:
+        logger.info("Received signal %d; requesting graceful stop", signum)
+        control.request_stop()
+
+    return handler
+
+
 def main() -> None:
-    """설정 로드 → Chrome attach → 예매창 상태머신 실행."""
+    """단일 인스턴스 잠금 → 설정 로드 → Chrome attach → 봇 스레드 → 상태머신 실행."""
     # nol_driver는 실제 브라우저 제어가 필요한 모듈이므로 진입점에서만 지연 임포트한다
+    import telegram_control
+    from control import ControlState
     from nol_driver import NolDriver
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    cfg = load_nol_config(ENV_PATH, NOL_TARGETS_PATH)
 
+    lock = acquire_single_instance_lock()
+    if lock is None:
+        logger.error("Another nol_monitor instance is already running; exiting")
+        raise SystemExit(1)
+
+    cfg = load_nol_config(ENV_PATH, NOL_TARGETS_PATH)
     driver = NolDriver(cfg.nol)
     state = SeatState()
+    control = ControlState(cfg.nol.date, cfg.nol.time)
 
     def notify(text: str) -> None:
         try:
@@ -203,6 +227,17 @@ def main() -> None:
         except AppBaseError as exc:
             # 텔레그램 실패의 상세 원인(토큰 포함 가능)을 로그에 남기지 않는다
             logger.error("Notify failed: %s", type(exc).__name__)
+
+    # SIGTERM/SIGINT를 종료 요청으로 수렴시킨다(graceful shutdown)
+    handler = _request_stop_on_signal(control)
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
+
+    # 봇 수신은 daemon 스레드: 프로세스 종료 시 함께 소멸(별도 join 불필요)
+    bot = threading.Thread(
+        target=telegram_control.serve, args=(cfg.telegram, control), daemon=True
+    )
+    bot.start()
 
     try:
         driver.attach()
@@ -212,11 +247,10 @@ def main() -> None:
             cfg.nol.date,
             cfg.nol.time,
         )
-        _run_loop(driver, cfg, state, notify)
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
+        _run_loop(driver, cfg, state, notify, control)
     finally:
         driver.close()
+        lock.close()
 
 
 if __name__ == "__main__":
