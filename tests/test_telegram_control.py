@@ -51,7 +51,9 @@ def test_handle_update_authorized_dispatches_and_replies():
     control = ControlState("20260802", "14:00")
     sent = []
     update = {"update_id": 1, "message": {"text": "/pause", "chat": {"id": 42}}}
-    telegram_control.handle_update(update, _cfg(), control, lambda cid, t: sent.append((cid, t)))
+    telegram_control.handle_update(
+        update, _cfg(), control, lambda cid, t: sent.append((cid, t))
+    )
     assert control.is_paused() is True
     assert sent == [(42, "일시정지됨")]
 
@@ -60,6 +62,8 @@ def test_handle_update_unauthorized_chat_ignored():
     control = ControlState("20260802", "14:00")
     sent = []
     update = {"update_id": 1, "message": {"text": "/stop", "chat": {"id": 999}}}
-    telegram_control.handle_update(update, _cfg(), control, lambda cid, t: sent.append((cid, t)))
+    telegram_control.handle_update(
+        update, _cfg(), control, lambda cid, t: sent.append((cid, t))
+    )
     assert control.should_stop() is False  # 인가되지 않음 → 무시
     assert sent == []

@@ -40,19 +40,12 @@ def format_status(snap: ControlSnapshot) -> str:
         last = "-"
     else:
         last = time.strftime("%H:%M:%S", time.localtime(snap.last_success_ts))
-    return (
-        "[NOL 상태]\n"
-        "목표: %s %s\n"
-        "상태: %s\n"
-        "연속 실패: %d\n"
-        "마지막 성공: %s"
-        % (
-            snap.target_date,
-            snap.target_time,
-            state_kr,
-            snap.consecutive_failures,
-            last,
-        )
+    return "[NOL 상태]\n목표: %s %s\n상태: %s\n연속 실패: %d\n마지막 성공: %s" % (
+        snap.target_date,
+        snap.target_time,
+        state_kr,
+        snap.consecutive_failures,
+        last,
     )
 
 
@@ -73,7 +66,7 @@ def dispatch(command: str, control: ControlState) -> str:
     return _USAGE
 
 
-def _extract_command(update: dict):
+def _extract_command(update: dict) -> tuple[str | None, object]:
     """update에서 (명령 텍스트, chat_id)를 뽑는다. 명령이 아니면 (None, None)."""
     message = update.get("message") or update.get("edited_message")
     if not message:
@@ -139,10 +132,13 @@ def serve(cfg: TelegramConfig, control: ControlState) -> None:
     while not control.should_stop():
         try:
             updates = _get_updates(cfg.token, offset)
+            for update in updates:
+                offset = update["update_id"] + 1
+                handle_update(update, cfg, control, send)
         except requests.RequestException as exc:
             logger.warning("getUpdates failed: %s", type(exc).__name__)
             time.sleep(3)
-            continue
-        for update in updates:
-            offset = update["update_id"] + 1
-            handle_update(update, cfg, control, send)
+        except (ValueError, KeyError) as exc:
+            # 비정상 JSON·형식의 update로 데몬이 죽지 않게 방어한다
+            logger.warning("bad update payload: %s", type(exc).__name__)
+            time.sleep(1)
