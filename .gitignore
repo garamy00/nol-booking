@@ -6,3 +6,5 @@ chrome_profile/
 .superpowers/
 *.swp
 scratch_nol_verify.py
+.nol_chrome.pid
+.venv/
