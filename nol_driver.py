@@ -16,6 +16,7 @@ import time
 
 from selenium import webdriver
 from selenium.common.exceptions import (
+    ElementClickInterceptedException,
     NoSuchElementException,
     TimeoutException,
     WebDriverException,
@@ -34,6 +35,12 @@ logger = logging.getLogger(__name__)
 
 DEBUGGER_ADDRESS = "127.0.0.1:9222"
 SEAT_PAGE_MARKER = "onestop/seat"
+
+# 반응형 레이아웃에서 예매하기 버튼(a.sideBtn.is-primary)이 렌더링되는 최소
+# 데스크톱 창 크기. 창이 이보다 좁으면 버튼 자체가 DOM에 그려지지 않아
+# 예매 진입이 실패하므로 attach 시 이 크기 이상으로 강제한다.
+MIN_DESKTOP_WIDTH = 1440
+MIN_DESKTOP_HEIGHT = 1000
 
 # 캘린더가 리렌더링될 시간을 두기 위한 짧은 대기(SPA/jQuery 모두 즉시 반영되지 않음)
 CALENDAR_SETTLE_SEC = 0.5
@@ -176,9 +183,31 @@ class NolDriver:
                 "no interpark.com window found; open NOL and log in first"
             )
 
+        self._ensure_desktop_window(driver)
+
         self._driver = driver
         self._wait = WebDriverWait(driver, 15)
         logger.info("Attached to Chrome window: %s", matched_url)
+
+    def _ensure_desktop_window(self, driver) -> None:
+        """예매하기 버튼이 렌더링되도록 창을 데스크톱 크기 이상으로 확대한다.
+
+        창이 좁으면 반응형 레이아웃에서 a.sideBtn.is-primary가 DOM에 나타나지
+        않아 예매 진입이 실패한다. 이미 충분히 큰 창은 건드리지 않는다.
+        """
+        try:
+            size = driver.get_window_size()
+            if size["width"] < MIN_DESKTOP_WIDTH or size["height"] < MIN_DESKTOP_HEIGHT:
+                driver.set_window_size(MIN_DESKTOP_WIDTH, MIN_DESKTOP_HEIGHT)
+                logger.info(
+                    "Resized window to desktop layout %dx%d",
+                    MIN_DESKTOP_WIDTH,
+                    MIN_DESKTOP_HEIGHT,
+                )
+        except WebDriverException as exc:
+            logger.warning(
+                "could not ensure desktop window size: %s", type(exc).__name__
+            )
 
     def _find_interpark_window(self, driver) -> str | None:
         """모든 창을 순회해 interpark.com 창으로 전환하고 URL을 반환한다."""
@@ -332,10 +361,28 @@ class NolDriver:
         )
 
     def _click_book_button(self) -> None:
-        """예매하기 버튼을 클릭한다."""
+        """예매하기 버튼을 화면 안으로 스크롤한 뒤 클릭한다.
+
+        이 버튼(사이드 패널)은 페이지 하단이라 뷰포트 밖에 있을 수 있고, 그
+        상태의 네이티브 click은 클릭 지점이 없어 ElementClickInterceptedException
+        으로 실패한다. scrollIntoView로 화면 안에 넣고 클릭하되, 그래도
+        가로막히면 JS 클릭으로 폴백한다.
+        """
         try:
-            self._driver.find_element(By.CSS_SELECTOR, "a.sideBtn.is-primary").click()
-        except (NoSuchElementException, WebDriverException) as exc:
+            btn = self._driver.find_element(By.CSS_SELECTOR, "a.sideBtn.is-primary")
+        except NoSuchElementException as exc:
+            raise DriverError("enter_booking: book button not found") from exc
+
+        self._driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});", btn
+        )
+        try:
+            btn.click()
+        except ElementClickInterceptedException:
+            # 스크롤 후에도 가로막히면 이벤트를 직접 디스패치해 통과 클릭한다
+            logger.warning("book button intercepted after scroll; JS-clicking")
+            self._driver.execute_script("arguments[0].click();", btn)
+        except WebDriverException as exc:
             raise DriverError(
                 "enter_booking: failed to click book button: %s" % type(exc).__name__
             ) from exc

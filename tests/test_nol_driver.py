@@ -1,7 +1,8 @@
 import pytest
+from selenium.common.exceptions import ElementClickInterceptedException
 
 from config import NolAppConfig, NolConfig, NolTarget, PollConfig, TelegramConfig
-from nol_driver import parse_remaining, to_ampm
+from nol_driver import NolDriver, parse_remaining, to_ampm
 from nol_monitor import check_once
 from nol_seats import NolSeat
 from state import SeatState
@@ -115,3 +116,98 @@ def test_check_once_skips_match_when_not_on_target_schedule():
     fresh = check_once(driver, _cfg(), SeatState(), notify=sent.append)
     assert fresh == []
     assert sent == []
+
+
+# _click_book_button (뷰포트 밖 버튼 처리)
+
+
+class _FakeButton:
+    """네이티브 click을 흉내내는 가짜 예매 버튼."""
+
+    def __init__(self, intercept_native: bool):
+        self._intercept = intercept_native
+        self.native_click_calls = 0
+
+    def click(self):
+        self.native_click_calls += 1
+        if self._intercept:
+            raise ElementClickInterceptedException("blocked")
+
+
+class _FakeSeleniumDriver:
+    """find_element/execute_script만 흉내내는 최소 Selenium 드라이버 스텁."""
+
+    def __init__(self, button):
+        self._button = button
+        self.scripts: list[str] = []
+
+    def find_element(self, by, selector):
+        return self._button
+
+    def execute_script(self, script, *args):
+        self.scripts.append(script)
+
+
+def _driver_with(button) -> NolDriver:
+    driver = NolDriver(_cfg().nol)
+    driver._driver = _FakeSeleniumDriver(button)
+    return driver
+
+
+def test_click_book_button_scrolls_into_view_before_native_click():
+    button = _FakeButton(intercept_native=False)
+    driver = _driver_with(button)
+
+    driver._click_book_button()
+
+    assert button.native_click_calls == 1
+    assert any("scrollIntoView" in s for s in driver._driver.scripts)
+
+
+def test_click_book_button_falls_back_to_js_click_when_intercepted():
+    # 스크롤 후에도 뷰포트 밖/가로막힘이면 JS 클릭으로 통과해 예외 없이 진입한다
+    button = _FakeButton(intercept_native=True)
+    driver = _driver_with(button)
+
+    driver._click_book_button()
+
+    assert any("scrollIntoView" in s for s in driver._driver.scripts)
+    assert any(".click()" in s for s in driver._driver.scripts)
+
+
+# _ensure_desktop_window (좁은 창에서 예매 버튼 미렌더링 방지)
+
+
+class _FakeWindowDriver:
+    """창 크기 조회/설정만 흉내내는 스텁."""
+
+    def __init__(self, width: int, height: int):
+        self._size = {"width": width, "height": height}
+        self.set_calls: list[tuple[int, int]] = []
+
+    def get_window_size(self):
+        return self._size
+
+    def set_window_size(self, width, height):
+        self.set_calls.append((width, height))
+
+
+def test_ensure_desktop_window_enlarges_narrow_window():
+    # 좁은 창은 데스크톱 폭 이상으로 확대되어야 한다(예매 버튼이 렌더링되도록)
+    driver = NolDriver(_cfg().nol)
+    fake = _FakeWindowDriver(800, 600)
+
+    driver._ensure_desktop_window(fake)
+
+    assert len(fake.set_calls) == 1
+    width, _height = fake.set_calls[0]
+    assert width >= 1440
+
+
+def test_ensure_desktop_window_leaves_large_window_untouched():
+    driver = NolDriver(_cfg().nol)
+    fake = _FakeWindowDriver(1920, 1080)
+
+    driver._ensure_desktop_window(fake)
+
+    assert fake.set_calls == []

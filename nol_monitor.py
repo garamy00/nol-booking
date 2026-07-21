@@ -126,9 +126,11 @@ def _run_loop(
             else:
                 driver.reenter()
         except DriverError as exc:
+            # 어느 단계에서 깨졌는지(캘린더/날짜/시각/예매버튼/좌석대기) 진단하려면
+            # 예외 타입명이 아니라 단계·URL이 담긴 전체 메시지를 남겨야 한다
             logger.error(
                 "Booking entry failed (%s); retrying in %ds",
-                type(exc).__name__,
+                exc,
                 REENTRY_BACKOFF_SECONDS,
             )
             notify("[NOL] 예매창 진입 실패: %s (재시도)" % type(exc).__name__)
