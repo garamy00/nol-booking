@@ -1,7 +1,12 @@
 import pytest
-from selenium.common.exceptions import ElementClickInterceptedException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    ElementNotInteractableException,
+)
 
+import nol_monitor
 from config import NolAppConfig, NolConfig, NolTarget, PollConfig, TelegramConfig
+from errors import DriverError
 from nol_driver import NolDriver, parse_remaining, to_ampm
 from nol_monitor import check_once
 from nol_seats import NolSeat
@@ -211,3 +216,110 @@ def test_ensure_desktop_window_leaves_large_window_untouched():
     driver._ensure_desktop_window(fake)
 
     assert fake.set_calls == []
+
+
+# _safe_click (뷰포트 밖/가로막힘 클릭의 공통 처리)
+
+
+class _ClickTargetDriver:
+    """execute_script(scrollIntoView/JS click)를 기록하는 스텁."""
+
+    def __init__(self):
+        self.scripts: list[str] = []
+
+    def execute_script(self, script, *args):
+        self.scripts.append(script)
+
+
+class _StubElement:
+    def __init__(self, raise_exc=None):
+        self._raise_exc = raise_exc
+        self.native_click_calls = 0
+
+    def click(self):
+        self.native_click_calls += 1
+        if self._raise_exc is not None:
+            raise self._raise_exc
+
+
+def _driver_for_click() -> NolDriver:
+    driver = NolDriver(_cfg().nol)
+    driver._driver = _ClickTargetDriver()
+    return driver
+
+
+def test_safe_click_scrolls_then_native_clicks_when_unobstructed():
+    driver = _driver_for_click()
+    element = _StubElement()
+
+    driver._safe_click(element)
+
+    assert element.native_click_calls == 1
+    assert any("scrollIntoView" in s for s in driver._driver.scripts)
+    # 네이티브 클릭이 성공하면 JS 폴백 클릭은 없어야 한다
+    assert not any(".click()" in s for s in driver._driver.scripts)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ElementClickInterceptedException("intercepted"),
+        ElementNotInteractableException("not interactable"),
+    ],
+)
+def test_safe_click_falls_back_to_js_click_on_click_failures(exc):
+    driver = _driver_for_click()
+    element = _StubElement(raise_exc=exc)
+
+    driver._safe_click(element)  # 예외 없이 통과해야 한다
+
+    assert any("scrollIntoView" in s for s in driver._driver.scripts)
+    assert any(".click()" in s for s in driver._driver.scripts)
+
+
+# _run_loop 실패 알림 스로틀링 (일시적 실패 스팸 방지)
+
+
+class _FlakyEntryDriver:
+    """enter/reenter가 지정 횟수만큼 실패한 뒤 성공하는 드라이버 스텁."""
+
+    def __init__(self, fail_times: int):
+        self._fail_times = fail_times
+        self.attempts = 0
+
+    def enter_booking(self):
+        self.attempts += 1
+        if self.attempts <= self._fail_times:
+            raise DriverError("entry boom")
+
+    def reenter(self):
+        self.enter_booking()
+
+
+def _collect_run_loop_notifications(driver, monkeypatch) -> list[str]:
+    sent: list[str] = []
+    # 진입 성공 즉시 홀드로 처리해 바깥 루프를 종료시킨다
+    monkeypatch.setattr(nol_monitor, "_poll_until_hold_or_expiry", lambda *a: True)
+    monkeypatch.setattr(nol_monitor.time, "sleep", lambda _s: None)
+    nol_monitor._run_loop(driver, _cfg(), SeatState(), notify=sent.append)
+    return sent
+
+
+def test_run_loop_stays_silent_on_transient_failures(monkeypatch):
+    # 임계 미만(자가복구 범위)의 연속 실패는 알림을 보내지 않는다
+    driver = _FlakyEntryDriver(fail_times=nol_monitor.FAILURE_ALERT_THRESHOLD - 1)
+
+    sent = _collect_run_loop_notifications(driver, monkeypatch)
+
+    assert sent == []
+
+
+def test_run_loop_alerts_once_then_recovers_on_sustained_failure(monkeypatch):
+    # 임계 도달 시 경보 1회, 이후 진입 성공 시 복구 알림 1회
+    driver = _FlakyEntryDriver(fail_times=nol_monitor.FAILURE_ALERT_THRESHOLD)
+
+    sent = _collect_run_loop_notifications(driver, monkeypatch)
+
+    assert len(sent) == 2
+    assert "실패" in sent[0]
+    assert "복구" in sent[1]

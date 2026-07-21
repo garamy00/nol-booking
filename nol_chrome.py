@@ -10,6 +10,7 @@ from __future__ import annotations
 import configparser
 import logging
 import os
+import signal
 import subprocess
 import time
 
@@ -25,6 +26,9 @@ DEBUG_PORT = 9222
 
 # 이 도구 전용 Chrome 프로필(로그인 세션 영속). 스크립트 위치 기준 절대경로.
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_profile")
+
+# launch가 띄운 Chrome PID 기록 파일. stop이 이 PID로 정상 종료(SIGTERM)한다.
+PID_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nol_chrome.pid")
 
 # macOS 기본 Chrome 실행 파일. NOL_CHROME_BINARY로 오버라이드 가능.
 _DEFAULT_CHROME_BINARY = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -120,7 +124,7 @@ def launch_chrome(goods_url: str) -> None:
     args = _build_launch_args(goods_url)
     try:
         # start_new_session으로 런처 종료와 무관하게 Chrome이 계속 뜨게 한다
-        subprocess.Popen(
+        proc = subprocess.Popen(
             args,
             start_new_session=True,
             stdout=subprocess.DEVNULL,
@@ -129,11 +133,65 @@ def launch_chrome(goods_url: str) -> None:
     except FileNotFoundError as exc:
         raise LauncherError("chrome binary not found: %s" % args[0]) from exc
 
+    # stop 명령이 정상 종료할 수 있도록 PID를 기록한다
+    _write_pid_file(proc.pid)
     logger.info(
-        "Launched Chrome on debug port %d with profile %s",
+        "Launched Chrome (pid %d) on debug port %d with profile %s",
+        proc.pid,
         DEBUG_PORT,
         PROFILE_DIR,
     )
+
+
+def _write_pid_file(pid: int) -> None:
+    """launch한 Chrome PID를 기록한다(실패해도 실행은 계속한다)."""
+    try:
+        with open(PID_PATH, "w") as pid_file:
+            pid_file.write(str(pid))
+    except OSError as exc:
+        logger.warning("could not write pid file %s: %s", PID_PATH, type(exc).__name__)
+
+
+def _remove_pid_file() -> None:
+    """PID 파일을 지운다(없어도 무시)."""
+    try:
+        os.remove(PID_PATH)
+    except OSError:
+        pass
+
+
+def stop() -> None:
+    """launch가 띄운 디버그 Chrome을 PID 파일 기반으로 정상 종료(SIGTERM)한다.
+
+    PID 파일이 없거나 이미 죽은 프로세스면 조용히 넘어간다. kill -9와 달리
+    SIGTERM은 Chrome이 프로필을 정상 저장하고 종료하게 한다.
+
+    Raises:
+        LauncherError: PID 파일이 손상됐거나 종료 신호 전송이 실패했을 때.
+    """
+    if not os.path.exists(PID_PATH):
+        logger.info("No launcher pid file (%s); nothing to stop", PID_PATH)
+        return
+
+    try:
+        with open(PID_PATH) as pid_file:
+            pid = int(pid_file.read().strip())
+    except (OSError, ValueError) as exc:
+        raise LauncherError(
+            "cannot read pid file %s: %s" % (PID_PATH, type(exc).__name__)
+        ) from exc
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        logger.info("Sent SIGTERM to Chrome pid %d", pid)
+    except ProcessLookupError:
+        logger.info("Chrome pid %d not running; cleaning up pid file", pid)
+    except OSError as exc:
+        raise LauncherError(
+            "failed to stop pid %d: %s" % (pid, type(exc).__name__)
+        ) from exc
+    finally:
+        _remove_pid_file()
 
 
 def main() -> None:
@@ -155,8 +213,15 @@ def main() -> None:
 if __name__ == "__main__":
     import sys
 
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     try:
-        main()
+        # `python nol_chrome.py stop`이면 종료, 인수 없으면 기존 실행
+        if len(sys.argv) > 1 and sys.argv[1] == "stop":
+            stop()
+        else:
+            main()
     except LauncherError as exc:
         logger.error("Launcher failed: %s", exc)
         sys.exit(1)

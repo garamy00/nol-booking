@@ -1,3 +1,4 @@
+import signal
 import textwrap
 
 import pytest
@@ -112,3 +113,63 @@ def test_main_launches_when_debugger_down(monkeypatch):
     nol_chrome.main()
     assert calls["launch"] == "https://x/g/1"
     assert calls["waited"] is True
+
+
+# stop / PID 파일 (창 종료 후 남는 Chrome 정상 종료)
+
+
+def test_launch_chrome_writes_pidfile(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".nol_chrome.pid"
+    monkeypatch.setattr(nol_chrome, "PID_PATH", str(pidfile))
+
+    class _FakeProc:
+        pid = 4242
+
+    monkeypatch.setattr(nol_chrome.subprocess, "Popen", lambda *a, **k: _FakeProc())
+
+    nol_chrome.launch_chrome("https://x/goods/1")
+
+    assert pidfile.read_text().strip() == "4242"
+
+
+def test_stop_sends_sigterm_and_removes_pidfile(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".nol_chrome.pid"
+    pidfile.write_text("12345")
+    monkeypatch.setattr(nol_chrome, "PID_PATH", str(pidfile))
+    killed = []
+    monkeypatch.setattr(
+        nol_chrome.os, "kill", lambda pid, sig: killed.append((pid, sig))
+    )
+
+    nol_chrome.stop()
+
+    assert killed == [(12345, signal.SIGTERM)]
+    assert not pidfile.exists()
+
+
+def test_stop_without_pidfile_is_noop(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".nol_chrome.pid"  # 생성하지 않음
+    monkeypatch.setattr(nol_chrome, "PID_PATH", str(pidfile))
+    killed = []
+    monkeypatch.setattr(
+        nol_chrome.os, "kill", lambda pid, sig: killed.append((pid, sig))
+    )
+
+    nol_chrome.stop()  # 예외 없이 넘어가야 한다
+
+    assert killed == []
+
+
+def test_stop_dead_process_still_removes_pidfile(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".nol_chrome.pid"
+    pidfile.write_text("999999")
+    monkeypatch.setattr(nol_chrome, "PID_PATH", str(pidfile))
+
+    def _raise(pid, sig):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(nol_chrome.os, "kill", _raise)
+
+    nol_chrome.stop()  # 이미 죽은 프로세스여도 예외 없이 정리
+
+    assert not pidfile.exists()
