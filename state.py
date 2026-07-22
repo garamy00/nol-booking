@@ -1,6 +1,6 @@
 """좌석 묶음의 상태 변화를 추적해 신규 항목만 골라낸다."""
 
-from seats import SeatGroup
+from nol_seats import NolSeatGroup
 
 
 class SeatState:
@@ -9,7 +9,7 @@ class SeatState:
     def __init__(self) -> None:
         self._alive: set[tuple] = set()
 
-    def new_groups(self, current: list[SeatGroup]) -> list[SeatGroup]:
+    def new_groups(self, current: list[NolSeatGroup]) -> list[NolSeatGroup]:
         """이번 회차에서 직전 대비 새로 나타난 묶음만 반환한다.
 
         내부 상태를 이번 회차 기준으로 갱신하므로, 사라졌다 다시 나타난

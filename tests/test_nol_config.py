@@ -140,6 +140,24 @@ def test_rows_with_non_int_element_raises_configerror(tmp_path):
         load_nol_config(env_path, nol_targets_path)
 
 
+def test_runtime_defaults_when_section_missing(tmp_path):
+    env_path, nol_targets_path = _write(tmp_path, ENV_OK, NOL_TARGETS_OK)
+    cfg = load_nol_config(env_path, nol_targets_path)
+    assert cfg.runtime.debug_port == 9222
+    assert cfg.runtime.window_width == 1440
+    assert cfg.runtime.max_session_seconds == 540
+
+
+def test_runtime_values_from_env(tmp_path):
+    env = ENV_OK + "\n[RUNTIME]\nDEBUG_PORT=9333\nWINDOW_WIDTH=1600\n"
+    env_path, nol_targets_path = _write(tmp_path, env, NOL_TARGETS_OK)
+    cfg = load_nol_config(env_path, nol_targets_path)
+    assert cfg.runtime.debug_port == 9333
+    assert cfg.runtime.window_width == 1600
+    # 지정 안 한 키는 기본값
+    assert cfg.runtime.window_height == 1000
+
+
 def test_consecutive_bad_type_raises_configerror(tmp_path):
     nol_targets = textwrap.dedent(
         """

@@ -1,3 +1,17 @@
+[project]
+name = "nol-booking"
+version = "0.1.0"
+description = "인터파크 NOL 좌석 모니터 — 목표 좌석 발견 시 Telegram 알림"
+requires-python = ">=3.9"
+dependencies = [
+    "selenium>=4.20",
+    "PyYAML>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
 [tool.ruff]
 line-length = 88
 

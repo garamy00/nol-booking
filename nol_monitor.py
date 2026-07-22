@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from typing import TextIO
 
-from config import NolAppConfig, load_nol_config
+from config import DEFAULT_RUNTIME, NolAppConfig, RuntimeConfig, load_nol_config
 from errors import AppBaseError, DriverError
 from nol_seats import NolSeatGroup, find_nol_groups
 from notifier import send_telegram
@@ -28,20 +28,13 @@ LOCK_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".nol_monitor.lock"
 )
 
-# 좌석 선택 세션(10분) 만료 전에 여유를 두고 재진입하기 위한 안전 마진
-SAFETY_SECONDS = 40
-
-# 페이지 타이머 텍스트를 못 읽을 때를 대비한 벽시계 기반 세션 상한(초).
-# 실제 제한(10분)보다 넉넉히 앞서 재진입해 만료로 인한 실패를 피한다.
-MAX_SESSION_SECONDS = 9 * 60
-
-# 예매창 진입 실패 시 재시도 전 대기(초)
-REENTRY_BACKOFF_SECONDS = 30
-
-# 예매창 진입 실패는 재진입 과정에서 1~3회 발생 후 자가복구되는 일이 잦다.
-# 매 실패마다 알리면 텔레그램이 스팸이 되므로, 연속 실패가 이 임계에 도달해
-# 지속 장애로 판단될 때만 한 번 알린다.
-FAILURE_ALERT_THRESHOLD = 5
+# 아래 모듈 상수는 cfg.runtime이 없는 호출부(테스트 등)를 위한 기본값
+# 폴백이며, config.DEFAULT_RUNTIME과 동일한 값을 참조한다. 실제 실행
+# 흐름(_is_session_expiring·_run_loop)은 cfg.runtime.<field>를 사용한다.
+SAFETY_SECONDS = DEFAULT_RUNTIME.safety_seconds
+MAX_SESSION_SECONDS = DEFAULT_RUNTIME.max_session_seconds
+REENTRY_BACKOFF_SECONDS = DEFAULT_RUNTIME.reentry_backoff_seconds
+FAILURE_ALERT_THRESHOLD = DEFAULT_RUNTIME.failure_alert_threshold
 
 
 def check_once(
@@ -80,15 +73,15 @@ def _sleep_with_jitter(cfg: NolAppConfig, control) -> None:
     control.wait_for_stop(delay)
 
 
-def _is_session_expiring(driver, session_start: float) -> bool:
+def _is_session_expiring(driver, session_start: float, runtime: RuntimeConfig) -> bool:
     """페이지 타이머(가능하면) 또는 벽시계 상한으로 세션 만료 임박을 판단한다."""
     elapsed = time.monotonic() - session_start
-    if elapsed > MAX_SESSION_SECONDS:
+    if elapsed > runtime.max_session_seconds:
         logger.info("Session wall-clock limit reached (%.0fs); re-entering", elapsed)
         return True
 
     rem = driver.remaining_seconds()
-    if rem is not None and rem < SAFETY_SECONDS:
+    if rem is not None and rem < runtime.safety_seconds:
         logger.info("Session timer low (remaining=%ss); re-entering", rem)
         return True
 
@@ -108,7 +101,7 @@ def _poll_until_hold_or_expiry(
         control.wait_if_paused()
         if control.should_stop():
             return False
-        if _is_session_expiring(driver, session_start):
+        if _is_session_expiring(driver, session_start, cfg.runtime):
             return False
 
         try:
@@ -154,16 +147,17 @@ def _run_loop(
                 "Booking entry failed (%s); attempt %d, retrying in %ds",
                 exc,
                 count,
-                REENTRY_BACKOFF_SECONDS,
+                cfg.runtime.reentry_backoff_seconds,
             )
             # 자가복구되는 일시적 실패는 알리지 않고, 임계 도달 시 한 번만 알린다
-            if count == FAILURE_ALERT_THRESHOLD:
+            if count == cfg.runtime.failure_alert_threshold:
                 notify("[NOL] 예매창 진입이 %d회 연속 실패했습니다 (확인 필요)" % count)
-            control.wait_for_stop(REENTRY_BACKOFF_SECONDS)
+            control.wait_for_stop(cfg.runtime.reentry_backoff_seconds)
             continue
 
         # 진입 성공: 지속 장애를 알렸던 경우에만 복구 알림 후 카운터 초기화
-        if control.snapshot().consecutive_failures >= FAILURE_ALERT_THRESHOLD:
+        failure_threshold = cfg.runtime.failure_alert_threshold
+        if control.snapshot().consecutive_failures >= failure_threshold:
             notify("[NOL] 예매창 진입 복구됨")
         control.mark_success()
         control.set_state("polling")
@@ -217,7 +211,7 @@ def main() -> None:
         raise SystemExit(1)
 
     cfg = load_nol_config(ENV_PATH, NOL_TARGETS_PATH)
-    driver = NolDriver(cfg.nol)
+    driver = NolDriver(cfg.nol, cfg.runtime)
     state = SeatState()
     control = ControlState(cfg.nol.date, cfg.nol.time)
 

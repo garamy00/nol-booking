@@ -10,8 +10,10 @@ from __future__ import annotations
 import configparser
 import logging
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import time
 
 import requests
@@ -32,6 +34,14 @@ PID_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nol_chrome
 
 # macOS 기본 Chrome 실행 파일. NOL_CHROME_BINARY로 오버라이드 가능.
 _DEFAULT_CHROME_BINARY = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# Linux에서 자동 탐지할 Chrome/Chromium 실행 파일 후보(우선순위 순)
+_LINUX_CHROME_CANDIDATES = (
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+)
 
 # DevTools 준비 폴링 간격(초)
 _POLL_INTERVAL_SEC = 0.5
@@ -64,12 +74,27 @@ def _read_goods_url(env_path: str) -> str:
     return "%s/%s" % (nol["URL"].strip(), nol["GOODS_ID"].strip())
 
 
-def is_debugger_up() -> bool:
-    """DevTools(127.0.0.1:9222)가 실제로 응답하면 True.
+def _read_debug_port(env_path: str) -> int:
+    """`.env` [RUNTIME] DEBUG_PORT를 읽는다. 없으면 기본 9222.
+
+    런처는 전체 설정에 의존하지 않으므로 최소로만 읽는다.
+    """
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#",))
+    parser.read(env_path)
+    if "RUNTIME" not in parser or "DEBUG_PORT" not in parser["RUNTIME"]:
+        return DEBUG_PORT
+    try:
+        return int(parser["RUNTIME"]["DEBUG_PORT"].strip().strip('"'))
+    except ValueError:
+        return DEBUG_PORT
+
+
+def is_debugger_up(port: int = DEBUG_PORT) -> bool:
+    """DevTools(127.0.0.1:port)가 실제로 응답하면 True.
 
     단순 포트 오픈이 아니라 /json/version 응답으로 attach 가능 여부를 판단한다.
     """
-    url = "http://127.0.0.1:%d/json/version" % DEBUG_PORT
+    url = "http://127.0.0.1:%d/json/version" % port
     try:
         resp = requests.get(url, timeout=_PROBE_TIMEOUT_SEC)
     except requests.RequestException:
@@ -77,7 +102,7 @@ def is_debugger_up() -> bool:
     return resp.status_code == 200
 
 
-def wait_for_debugger(timeout: float = 20.0) -> None:
+def wait_for_debugger(port: int = DEBUG_PORT, timeout: float = 20.0) -> None:
     """DevTools가 응답할 때까지 폴링한다.
 
     Raises:
@@ -86,42 +111,62 @@ def wait_for_debugger(timeout: float = 20.0) -> None:
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if is_debugger_up():
+        if is_debugger_up(port):
             return
         time.sleep(_POLL_INTERVAL_SEC)
 
-    if is_debugger_up():
+    if is_debugger_up(port):
         return
 
     raise LauncherError(
         "debug port %d not responding within %.0fs; a Chrome using this "
         "profile may already be open without the debug port — close it and "
-        "retry" % (DEBUG_PORT, timeout)
+        "retry" % (port, timeout)
     )
 
 
 def _chrome_binary() -> str:
-    """Chrome 실행 파일 경로. 환경변수 오버라이드 우선."""
-    return os.environ.get("NOL_CHROME_BINARY", _DEFAULT_CHROME_BINARY)
+    """Chrome 실행 파일 경로를 결정한다.
+
+    NOL_CHROME_BINARY가 있으면 그 값을, 없으면 플랫폼별로 탐지한다. macOS는 기본
+    앱 경로, Linux는 google-chrome/chromium 계열을 PATH에서 찾는다.
+
+    Raises:
+        LauncherError: Linux에서 후보를 하나도 찾지 못함.
+    """
+    override = os.environ.get("NOL_CHROME_BINARY")
+    if override:
+        return override
+
+    if sys.platform == "darwin":
+        return _DEFAULT_CHROME_BINARY
+
+    for candidate in _LINUX_CHROME_CANDIDATES:
+        path = shutil.which(candidate)
+        if path:
+            return path
+    raise LauncherError(
+        "no Chrome/Chromium found; install one or set NOL_CHROME_BINARY"
+    )
 
 
-def _build_launch_args(goods_url: str) -> list[str]:
+def _build_launch_args(goods_url: str, port: int = DEBUG_PORT) -> list[str]:
     """Chrome 실행 인수 리스트를 조립한다(goods_url을 마지막에 둔다)."""
     return [
         _chrome_binary(),
-        "--remote-debugging-port=%d" % DEBUG_PORT,
+        "--remote-debugging-port=%d" % port,
         "--user-data-dir=%s" % PROFILE_DIR,
         goods_url,
     ]
 
 
-def launch_chrome(goods_url: str) -> None:
+def launch_chrome(goods_url: str, port: int = DEBUG_PORT) -> None:
     """전용 프로필로 Chrome을 detached 실행하고 goods 페이지를 연다.
 
     Raises:
         LauncherError: Chrome 실행 파일을 찾지 못함.
     """
-    args = _build_launch_args(goods_url)
+    args = _build_launch_args(goods_url, port)
     try:
         # start_new_session으로 런처 종료와 무관하게 Chrome이 계속 뜨게 한다
         proc = subprocess.Popen(
@@ -138,7 +183,7 @@ def launch_chrome(goods_url: str) -> None:
     logger.info(
         "Launched Chrome (pid %d) on debug port %d with profile %s",
         proc.pid,
-        DEBUG_PORT,
+        port,
         PROFILE_DIR,
     )
 
@@ -200,19 +245,18 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
 
-    if is_debugger_up():
-        logger.info("Chrome already running on debug port %d", DEBUG_PORT)
+    port = _read_debug_port(ENV_PATH)
+    if is_debugger_up(port):
+        logger.info("Chrome already running on debug port %d", port)
         return
 
     goods_url = _read_goods_url(ENV_PATH)
-    launch_chrome(goods_url)
-    wait_for_debugger()
-    logger.info("Chrome ready on debug port %d", DEBUG_PORT)
+    launch_chrome(goods_url, port)
+    wait_for_debugger(port)
+    logger.info("Chrome ready on debug port %d", port)
 
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )

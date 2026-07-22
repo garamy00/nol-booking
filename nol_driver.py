@@ -28,14 +28,16 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from config import NolConfig
+import interpark_dom
+from config import DEFAULT_RUNTIME, NolConfig, RuntimeConfig
 from errors import DriverError
 from nol_seats import NolSeat, parse_seat_meta
 
 logger = logging.getLogger(__name__)
 
+# runtime(RuntimeConfig)이 주어지지 않았을 때 쓰는 기본값. 실제 값은
+# NolDriver 생성 시 전달된 RuntimeConfig(config.DEFAULT_RUNTIME 포함)를 따른다.
 DEBUGGER_ADDRESS = "127.0.0.1:9222"
-SEAT_PAGE_MARKER = "onestop/seat"
 
 # 반응형 레이아웃에서 예매하기 버튼(a.sideBtn.is-primary)이 렌더링되는 최소
 # 데스크톱 창 크기. 창이 이보다 좁으면 버튼 자체가 DOM에 그려지지 않아
@@ -56,40 +58,6 @@ RELOAD_RETRY_WAIT_SEC = 1.0
 
 _REMAINING_STRIP_RE = re.compile(r"\s+")
 _REMAINING_RE = re.compile(r"좌석선택시간(\d+):(\d+)")
-
-# WHY: NOL 좌석 SVG 자체에는 구역/열/번호 라벨이 없다. 대신 각 가용 좌석
-# circle의 React fiber(내부 프로퍼티 `__reactFiber$...`)에 렌더링 이전의
-# 원본 seat 메타데이터(memoizedProps.seat: floor/rowNo/seatNo/seatGradeName)가
-# 그대로 보존되어 있어 이를 직접 읽어낸다. React 내부 구현(비공개 API)에
-# 의존하므로 interpark가 빌드를 바꾸면(fiber 키 접두어, prop 구조 등)
-# 이 스크립트도 함께 갱신해야 한다.
-_READ_SEATS_JS = """
-const circles = [...document.querySelectorAll('circle.js-seat')];
-const out = [];
-for (const c of circles) {
-    if ([...c.classList].some((x) => /disabled/i.test(x))) continue;
-    const fiberKey = Object.keys(c).find((k) => k.startsWith('__reactFiber$'));
-    if (!fiberKey) continue;
-    let fiber = c[fiberKey];
-    let seat = null;
-    for (let i = 0; i < 4 && fiber; i++) {
-        if (fiber.memoizedProps && fiber.memoizedProps.seat) {
-            seat = fiber.memoizedProps.seat;
-            break;
-        }
-        fiber = fiber.return;
-    }
-    if (!seat) continue;
-    out.push({
-        id: c.id,
-        floor: seat.floor,
-        rowNo: seat.rowNo,
-        seatNo: seat.seatNo,
-        grade: seat.seatGradeName,
-    });
-}
-return out;
-"""
 
 
 def _resolve_service() -> Service:
@@ -152,8 +120,9 @@ def _day_number(yyyymmdd: str) -> str:
 class NolDriver:
     """이미 열려 있는 Chrome(디버그 포트)에 attach해 NOL 예매창을 네비게이션한다."""
 
-    def __init__(self, cfg: NolConfig) -> None:
+    def __init__(self, cfg: NolConfig, runtime: RuntimeConfig | None = None) -> None:
         self._cfg = cfg
+        self._runtime = runtime if runtime is not None else DEFAULT_RUNTIME
         self._driver = None
         self._wait = None
 
@@ -168,14 +137,15 @@ class NolDriver:
         Raises:
             DriverError: Chrome 연결 실패 또는 interpark.com 창을 찾지 못함.
         """
+        address = "127.0.0.1:%d" % self._runtime.debug_port
         options = Options()
-        options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
+        options.add_experimental_option("debuggerAddress", address)
         try:
             driver = webdriver.Chrome(options=options, service=_resolve_service())
         except WebDriverException as exc:
             raise DriverError(
                 "cannot attach to Chrome on %s; is it running with "
-                "--remote-debugging-port=9222?" % DEBUGGER_ADDRESS
+                "--remote-debugging-port=%d?" % (address, self._runtime.debug_port)
             ) from exc
 
         matched_url = self._find_interpark_window(driver)
@@ -196,14 +166,14 @@ class NolDriver:
         창이 좁으면 반응형 레이아웃에서 a.sideBtn.is-primary가 DOM에 나타나지
         않아 예매 진입이 실패한다. 이미 충분히 큰 창은 건드리지 않는다.
         """
+        min_width = self._runtime.window_width
+        min_height = self._runtime.window_height
         try:
             size = driver.get_window_size()
-            if size["width"] < MIN_DESKTOP_WIDTH or size["height"] < MIN_DESKTOP_HEIGHT:
-                driver.set_window_size(MIN_DESKTOP_WIDTH, MIN_DESKTOP_HEIGHT)
+            if size["width"] < min_width or size["height"] < min_height:
+                driver.set_window_size(min_width, min_height)
                 logger.info(
-                    "Resized window to desktop layout %dx%d",
-                    MIN_DESKTOP_WIDTH,
-                    MIN_DESKTOP_HEIGHT,
+                    "Resized window to desktop layout %dx%d", min_width, min_height
                 )
         except WebDriverException as exc:
             logger.warning(
@@ -242,7 +212,7 @@ class NolDriver:
     def is_on_seat_page(self) -> bool:
         """현재 창이 예매창(onestop/seat)인지 확인한다."""
         self._require_attached()
-        return SEAT_PAGE_MARKER in self._driver.current_url
+        return interpark_dom.SEAT_PAGE_MARKER in self._driver.current_url
 
     def current_schedule_text(self) -> str:
         """상단에 표시된 현재 선택 일정 텍스트를 반환한다.
@@ -252,8 +222,9 @@ class NolDriver:
         self._require_attached()
         return (
             self._driver.execute_script(
-                "const e = document.querySelector('[class*=scheduleDate]');"
+                "const e = document.querySelector('%s');"
                 "return e ? (e.innerText || e.textContent || '') : '';"
+                % interpark_dom.SCHEDULE_DATE_QUERY
             )
             or ""
         )
@@ -305,13 +276,17 @@ class NolDriver:
         """goods 캘린더가 접혀 있으면 sideToggleBtn을 눌러 펼친다."""
         try:
             days = self._driver.find_elements(
-                By.CSS_SELECTOR, "ul[data-view='days'] > li"
+                By.CSS_SELECTOR, interpark_dom.GOODS_DAYS
             )
             if days and days[0].is_displayed():
                 return
-            self._safe_click(self._driver.find_element(By.CSS_SELECTOR, ".sideToggleBtn"))
+            self._safe_click(
+                self._driver.find_element(
+                    By.CSS_SELECTOR, interpark_dom.GOODS_SIDE_TOGGLE
+                )
+            )
             self._wait.until(
-                lambda d: d.find_elements(By.CSS_SELECTOR, "ul[data-view='days'] > li")
+                lambda d: d.find_elements(By.CSS_SELECTOR, interpark_dom.GOODS_DAYS)
             )
         except (NoSuchElementException, TimeoutException, WebDriverException) as exc:
             raise DriverError(
@@ -324,13 +299,13 @@ class NolDriver:
         try:
             for _ in range(MAX_MONTH_ADVANCE):
                 current = self._driver.find_element(
-                    By.CSS_SELECTOR, "li[data-view='month current']"
+                    By.CSS_SELECTOR, interpark_dom.GOODS_MONTH_CURRENT
                 ).text.strip()
                 if current == target_label:
                     return
                 self._safe_click(
                     self._driver.find_element(
-                        By.CSS_SELECTOR, "li[data-view='month next']"
+                        By.CSS_SELECTOR, interpark_dom.GOODS_MONTH_NEXT
                     )
                 )
                 time.sleep(CALENDAR_SETTLE_SEC)
@@ -349,7 +324,7 @@ class NolDriver:
         day_num = _day_number(yyyymmdd)
         try:
             cells = self._driver.find_elements(
-                By.CSS_SELECTOR, "ul[data-view='days'] > li"
+                By.CSS_SELECTOR, interpark_dom.GOODS_DAYS
             )
             for cell in cells:
                 classes = cell.get_attribute("class") or ""
@@ -368,7 +343,9 @@ class NolDriver:
     def _click_goods_time(self, time_hhmm: str) -> None:
         """목표 24h 시각을 포함하는 timeTableLabel을 클릭한다."""
         try:
-            labels = self._driver.find_elements(By.CSS_SELECTOR, "a.timeTableLabel")
+            labels = self._driver.find_elements(
+                By.CSS_SELECTOR, interpark_dom.GOODS_TIME_LABEL
+            )
             for label in labels:
                 data_text = label.get_attribute("data-text") or ""
                 if time_hhmm in data_text:
@@ -390,7 +367,9 @@ class NolDriver:
         으로 스크롤 후 클릭한다.
         """
         try:
-            btn = self._driver.find_element(By.CSS_SELECTOR, "a.sideBtn.is-primary")
+            btn = self._driver.find_element(
+                By.CSS_SELECTOR, interpark_dom.GOODS_BOOK_BUTTON
+            )
         except NoSuchElementException as exc:
             raise DriverError("enter_booking: book button not found") from exc
 
@@ -409,7 +388,7 @@ class NolDriver:
         기다린다.
         """
         try:
-            self._wait.until(lambda d: SEAT_PAGE_MARKER in d.current_url)
+            self._wait.until(lambda d: interpark_dom.SEAT_PAGE_MARKER in d.current_url)
             self._wait_for_seats_rendered()
         except TimeoutException as exc:
             raise DriverError(
@@ -421,7 +400,8 @@ class NolDriver:
         """좌석 circle.js-seat가 하나 이상 렌더링될 때까지 대기한다."""
         self._wait.until(
             lambda d: d.execute_script(
-                "return document.querySelectorAll('circle.js-seat').length;"
+                "return document.querySelectorAll('%s').length;"
+                % interpark_dom.SEAT_CIRCLE
             )
             > 0
         )
@@ -435,7 +415,7 @@ class NolDriver:
         """
         self._require_attached()
         try:
-            raw_seats = self._driver.execute_script(_READ_SEATS_JS)
+            raw_seats = self._driver.execute_script(interpark_dom.READ_SEATS_JS)
         except WebDriverException as exc:
             raise DriverError("failed to read seats: %s" % type(exc).__name__) from exc
 
@@ -458,8 +438,9 @@ class NolDriver:
         # execute_script의 innerText로 직접 읽는다.
         try:
             text = self._driver.execute_script(
-                "const e = document.querySelector('[class*=SessionDwellTimer]');"
+                "const e = document.querySelector('%s');"
                 "return e ? (e.innerText || e.textContent || '') : null;"
+                % interpark_dom.SESSION_TIMER_QUERY
             )
         except WebDriverException as exc:
             raise DriverError(
@@ -502,19 +483,19 @@ class NolDriver:
         """
         button = self._wait.until(
             EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button[class*='SubHeader_layerDateButton']")
+                (By.CSS_SELECTOR, interpark_dom.LAYER_DATE_BUTTON)
             )
         )
         self._safe_click(button)
         self._wait.until(
             EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "[class*='LayerDate_container']")
+                (By.CSS_SELECTOR, interpark_dom.LAYER_CONTAINER)
             )
         )
         # 레이어 컨테이너가 떠도 내부 캘린더(월 헤더)는 잠시 뒤 렌더되므로 대기한다
         self._wait.until(
             EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "[class*='EntCalendar_month']")
+                (By.CSS_SELECTOR, interpark_dom.LAYER_MONTH)
             )
         )
 
@@ -526,7 +507,7 @@ class NolDriver:
             # textContent로 직접 읽는다(렌더링 상태와 무관).
             current = (
                 self._driver.find_element(
-                    By.CSS_SELECTOR, "[class*='EntCalendar_month']"
+                    By.CSS_SELECTOR, interpark_dom.LAYER_MONTH
                 ).get_attribute("textContent")
                 or ""
             ).strip()
@@ -534,7 +515,9 @@ class NolDriver:
                 return
             # "YYYY.MM" 고정폭 형식이라 문자열 비교로 방향 판단이 가능하다
             btn_id = (
-                "swiperButtonNext" if current < target_label else "swiperButtonPrev"
+                interpark_dom.LAYER_SWIPER_NEXT_ID
+                if current < target_label
+                else interpark_dom.LAYER_SWIPER_PREV_ID
             )
             btn = self._driver.find_element(By.ID, btn_id)
             if "disabled" in (btn.get_attribute("class") or ""):
@@ -552,16 +535,16 @@ class NolDriver:
         """활성 슬라이드에서 목표 일(day) 버튼을 클릭한다(disabled 제외)."""
         day_num = _day_number(yyyymmdd)
         active_slide = self._driver.find_element(
-            By.CSS_SELECTOR, ".swiper-slide-active"
+            By.CSS_SELECTOR, interpark_dom.LAYER_SWIPER_ACTIVE
         )
         buttons = active_slide.find_elements(
-            By.CSS_SELECTOR, "button[class*='EntCalendar_dateButton']"
+            By.CSS_SELECTOR, interpark_dom.LAYER_DATE_ITEM_BUTTON
         )
         for button in buttons:
             if button.get_attribute("disabled"):
                 continue
             numbers = button.find_elements(
-                By.CSS_SELECTOR, "span[class*='EntCalendar_number']"
+                By.CSS_SELECTOR, interpark_dom.LAYER_DATE_NUMBER
             )
             if not numbers:
                 continue
@@ -583,7 +566,7 @@ class NolDriver:
         target = to_ampm(time_hhmm)
 
         def _find_target_time(driver):
-            selector = "button[class*='TimeBlock_timeButton']"
+            selector = interpark_dom.LAYER_TIME_BUTTON
             for button in driver.find_elements(By.CSS_SELECTOR, selector):
                 text = (button.get_attribute("textContent") or "").strip()
                 if text.startswith(target):
@@ -602,7 +585,7 @@ class NolDriver:
     def _click_apply_button(self) -> None:
         """변경하기 버튼(EntButton_primary)을 클릭한다."""
         buttons = self._driver.find_elements(
-            By.CSS_SELECTOR, "button[class*='EntButton_primary']"
+            By.CSS_SELECTOR, interpark_dom.LAYER_APPLY_BUTTON
         )
         for button in buttons:
             if "변경하기" in button.text:
@@ -618,10 +601,12 @@ class NolDriver:
         """레이어가 사라지고 좌석 circle이 다시 렌더링될 때까지 대기한다."""
         self._wait.until(
             EC.invisibility_of_element_located(
-                (By.CSS_SELECTOR, "[class*='LayerDate_container']")
+                (By.CSS_SELECTOR, interpark_dom.LAYER_CONTAINER)
             )
         )
-        self._wait.until(lambda d: d.find_elements(By.CSS_SELECTOR, "circle.js-seat"))
+        self._wait.until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, interpark_dom.SEAT_CIRCLE)
+        )
 
     def reload_target(self) -> None:
         """TOGGLE 날짜/시간으로 갔다가 TARGET으로 복귀해 좌석맵을 리로드한다.
