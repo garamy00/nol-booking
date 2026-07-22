@@ -1,9 +1,9 @@
-from seats import SeatGroup
+from nol_seats import NolSeatGroup
 from state import SeatState
 
 
 def _group(row, numbers):
-    return SeatGroup(floor="1F", section="B", row=row, numbers=numbers)
+    return NolSeatGroup(grade="R석", section="B", row=row, numbers=numbers)
 
 
 def test_first_appearance_is_new():
