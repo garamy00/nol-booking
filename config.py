@@ -41,11 +41,26 @@ class NolTarget:
 
 
 @dataclass
+class RuntimeConfig:
+    debug_port: int = 9222
+    window_width: int = 1440
+    window_height: int = 1000
+    safety_seconds: int = 40
+    max_session_seconds: int = 540
+    reentry_backoff_seconds: int = 30
+    failure_alert_threshold: int = 5
+
+
+DEFAULT_RUNTIME = RuntimeConfig()
+
+
+@dataclass
 class NolAppConfig:
     nol: NolConfig
     telegram: TelegramConfig
     targets: list[NolTarget] = field(default_factory=list)
     poll: PollConfig | None = None
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
 
 def _strip_quotes(value: str) -> str:
@@ -94,7 +109,10 @@ def load_nol_config(env_path: str, nol_targets_path: str) -> NolAppConfig:
     )
 
     targets, poll = _load_nol_targets(nol_targets_path)
-    return NolAppConfig(nol=nol, telegram=telegram, targets=targets, poll=poll)
+    runtime = _load_runtime(parser)
+    return NolAppConfig(
+        nol=nol, telegram=telegram, targets=targets, poll=poll, runtime=runtime
+    )
 
 
 def _parse_nol_poll(poll_raw: object) -> PollConfig | None:
@@ -182,3 +200,28 @@ def _parse_nol_rows(rows_raw: object, index: int) -> list[int] | None:
         raise ConfigError(
             "nol target %d: rows must be a list of ints: %s" % (index, str(exc))
         ) from exc
+
+
+def _load_runtime(parser: configparser.ConfigParser) -> RuntimeConfig:
+    """[RUNTIME] 섹션(모두 선택)을 읽어 RuntimeConfig를 만든다. 없으면 기본값."""
+    if "RUNTIME" not in parser:
+        return RuntimeConfig()
+    sec = parser["RUNTIME"]
+
+    def _int(key: str, default: int) -> int:
+        if key not in sec:
+            return default
+        try:
+            return int(_strip_quotes(sec[key]))
+        except ValueError as exc:
+            raise ConfigError("invalid [RUNTIME] %s: %s" % (key, str(exc))) from exc
+
+    return RuntimeConfig(
+        debug_port=_int("DEBUG_PORT", 9222),
+        window_width=_int("WINDOW_WIDTH", 1440),
+        window_height=_int("WINDOW_HEIGHT", 1000),
+        safety_seconds=_int("SAFETY_SECONDS", 40),
+        max_session_seconds=_int("MAX_SESSION_SECONDS", 540),
+        reentry_backoff_seconds=_int("REENTRY_BACKOFF_SECONDS", 30),
+        failure_alert_threshold=_int("FAILURE_ALERT_THRESHOLD", 5),
+    )

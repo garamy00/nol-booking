@@ -29,12 +29,14 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 import interpark_dom
-from config import NolConfig
+from config import DEFAULT_RUNTIME, NolConfig, RuntimeConfig
 from errors import DriverError
 from nol_seats import NolSeat, parse_seat_meta
 
 logger = logging.getLogger(__name__)
 
+# runtime(RuntimeConfig)이 주어지지 않았을 때 쓰는 기본값. 실제 값은
+# NolDriver 생성 시 전달된 RuntimeConfig(config.DEFAULT_RUNTIME 포함)를 따른다.
 DEBUGGER_ADDRESS = "127.0.0.1:9222"
 
 # 반응형 레이아웃에서 예매하기 버튼(a.sideBtn.is-primary)이 렌더링되는 최소
@@ -118,8 +120,9 @@ def _day_number(yyyymmdd: str) -> str:
 class NolDriver:
     """이미 열려 있는 Chrome(디버그 포트)에 attach해 NOL 예매창을 네비게이션한다."""
 
-    def __init__(self, cfg: NolConfig) -> None:
+    def __init__(self, cfg: NolConfig, runtime: RuntimeConfig | None = None) -> None:
         self._cfg = cfg
+        self._runtime = runtime if runtime is not None else DEFAULT_RUNTIME
         self._driver = None
         self._wait = None
 
@@ -134,14 +137,15 @@ class NolDriver:
         Raises:
             DriverError: Chrome 연결 실패 또는 interpark.com 창을 찾지 못함.
         """
+        address = "127.0.0.1:%d" % self._runtime.debug_port
         options = Options()
-        options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
+        options.add_experimental_option("debuggerAddress", address)
         try:
             driver = webdriver.Chrome(options=options, service=_resolve_service())
         except WebDriverException as exc:
             raise DriverError(
                 "cannot attach to Chrome on %s; is it running with "
-                "--remote-debugging-port=9222?" % DEBUGGER_ADDRESS
+                "--remote-debugging-port=%d?" % (address, self._runtime.debug_port)
             ) from exc
 
         matched_url = self._find_interpark_window(driver)
@@ -162,14 +166,14 @@ class NolDriver:
         창이 좁으면 반응형 레이아웃에서 a.sideBtn.is-primary가 DOM에 나타나지
         않아 예매 진입이 실패한다. 이미 충분히 큰 창은 건드리지 않는다.
         """
+        min_width = self._runtime.window_width
+        min_height = self._runtime.window_height
         try:
             size = driver.get_window_size()
-            if size["width"] < MIN_DESKTOP_WIDTH or size["height"] < MIN_DESKTOP_HEIGHT:
-                driver.set_window_size(MIN_DESKTOP_WIDTH, MIN_DESKTOP_HEIGHT)
+            if size["width"] < min_width or size["height"] < min_height:
+                driver.set_window_size(min_width, min_height)
                 logger.info(
-                    "Resized window to desktop layout %dx%d",
-                    MIN_DESKTOP_WIDTH,
-                    MIN_DESKTOP_HEIGHT,
+                    "Resized window to desktop layout %dx%d", min_width, min_height
                 )
         except WebDriverException as exc:
             logger.warning(
