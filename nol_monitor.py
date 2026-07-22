@@ -12,6 +12,8 @@ import time
 from collections.abc import Callable
 from typing import TextIO
 
+from selenium.common.exceptions import WebDriverException
+
 from config import DEFAULT_RUNTIME, NolAppConfig, RuntimeConfig, load_nol_config
 from errors import AppBaseError, DriverError
 from nol_seats import NolSeatGroup, find_nol_groups
@@ -22,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 ENV_PATH = ".env"
 NOL_TARGETS_PATH = "nol_targets.yaml"
+
+# driver 계층은 브라우저 오류를 DriverError로 변환하지만, 탭 크래시·attach 끊김이
+# 변환되지 않고 새어나오더라도 프로그램이 죽지 않도록 루프에서 함께 잡는 안전망
+RECOVERABLE_ENTRY_ERRORS = (DriverError, WebDriverException)
 
 # 단일 인스턴스 잠금 파일(스크립트 위치 기준). 중복 실행 시 두 번째는 종료.
 LOCK_PATH = os.path.join(
@@ -110,7 +116,7 @@ def _poll_until_hold_or_expiry(
                 logger.info("HOLD: target seat found, monitor paused on seat page")
                 return True
             driver.reload_target()
-        except DriverError as exc:
+        except RECOVERABLE_ENTRY_ERRORS as exc:
             logger.warning(
                 "Seat check/reload failed (%s); assuming session lost, re-entering",
                 type(exc).__name__,
@@ -141,7 +147,7 @@ def _run_loop(
                 first = False
             else:
                 driver.reenter()
-        except DriverError as exc:
+        except RECOVERABLE_ENTRY_ERRORS as exc:
             count = control.mark_failure()
             logger.error(
                 "Booking entry failed (%s); attempt %d, retrying in %ds",

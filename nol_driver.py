@@ -212,22 +212,38 @@ class NolDriver:
     def is_on_seat_page(self) -> bool:
         """현재 창이 예매창(onestop/seat)인지 확인한다."""
         self._require_attached()
-        return interpark_dom.SEAT_PAGE_MARKER in self._driver.current_url
+        # 탭 크래시·attach 끊김 시 raw WebDriverException이 새어나가면 상위 루프가
+        # 복구(재진입)로 처리하지 못하므로 도메인 예외(DriverError)로 감싼다
+        try:
+            return interpark_dom.SEAT_PAGE_MARKER in self._driver.current_url
+        except WebDriverException as exc:
+            raise DriverError(
+                "is_on_seat_page: browser unreachable: %s" % type(exc).__name__
+            ) from exc
 
     def current_schedule_text(self) -> str:
         """상단에 표시된 현재 선택 일정 텍스트를 반환한다.
 
         예: "2026.08.02(일) 2:00 PM". 요소가 없으면 빈 문자열.
+
+        Raises:
+            DriverError: 탭 크래시 등으로 브라우저에 접근할 수 없을 때.
         """
         self._require_attached()
-        return (
-            self._driver.execute_script(
-                "const e = document.querySelector('%s');"
-                "return e ? (e.innerText || e.textContent || '') : '';"
-                % interpark_dom.SCHEDULE_DATE_QUERY
+        # is_on_seat_page과 동일하게 브라우저 접근 불가를 도메인 예외로 변환한다
+        try:
+            return (
+                self._driver.execute_script(
+                    "const e = document.querySelector('%s');"
+                    "return e ? (e.innerText || e.textContent || '') : '';"
+                    % interpark_dom.SCHEDULE_DATE_QUERY
+                )
+                or ""
             )
-            or ""
-        )
+        except WebDriverException as exc:
+            raise DriverError(
+                "current_schedule_text: browser unreachable: %s" % type(exc).__name__
+            ) from exc
 
     def is_on_target_schedule(self) -> bool:
         """현재 예매창이 목표 날짜/회차(cfg.date/time)를 보여주는지 확인한다.

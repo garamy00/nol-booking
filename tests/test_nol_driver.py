@@ -2,6 +2,7 @@ import pytest
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     ElementNotInteractableException,
+    WebDriverException,
 )
 
 import nol_monitor
@@ -350,3 +351,61 @@ def test_signal_handler_requests_stop():
     handler = nol_monitor._request_stop_on_signal(control)
     handler(15, None)
     assert control.should_stop() is True
+
+
+# 탭 크래시(WebDriverException) 처리 — 프로그램이 죽지 않고 복구 경로로 빠져야 한다
+
+
+class _CrashedSeleniumDriver:
+    """탭 크래시를 흉내내어 current_url/execute_script가 WebDriverException을 던지는 스텁."""
+
+    @property
+    def current_url(self):
+        raise WebDriverException("tab crashed")
+
+    def execute_script(self, script, *args):
+        raise WebDriverException("tab crashed")
+
+
+def _crashed_driver() -> NolDriver:
+    driver = NolDriver(_cfg().nol)
+    driver._driver = _CrashedSeleniumDriver()
+    return driver
+
+
+def test_is_on_seat_page_wraps_tab_crash_as_driver_error():
+    # 탭 크래시가 raw WebDriverException으로 새어나가지 않고 DriverError로 감싸져야 한다
+    with pytest.raises(DriverError):
+        _crashed_driver().is_on_seat_page()
+
+
+def test_is_on_target_schedule_wraps_tab_crash_as_driver_error():
+    with pytest.raises(DriverError):
+        _crashed_driver().is_on_target_schedule()
+
+
+class _TabCrashEntryDriver:
+    """enter/reenter가 지정 횟수만큼 탭 크래시를 던진 뒤 성공하는 드라이버 스텁."""
+
+    def __init__(self, crash_times: int):
+        self._crash_times = crash_times
+        self.attempts = 0
+
+    def enter_booking(self):
+        self.attempts += 1
+        if self.attempts <= self._crash_times:
+            raise WebDriverException("tab crashed")
+
+    def reenter(self):
+        self.enter_booking()
+
+
+def test_run_loop_survives_tab_crash_and_reenters(monkeypatch):
+    # 탭 크래시(raw WebDriverException)가 프로그램을 죽이지 않고 재진입으로 복구되어야 한다
+    driver = _TabCrashEntryDriver(crash_times=2)
+
+    sent = _collect_run_loop_notifications(driver, monkeypatch)
+
+    # 2회 크래시 후 3번째 진입에 성공(임계 미만이라 알림 없음)
+    assert driver.attempts == 3
+    assert sent == []
