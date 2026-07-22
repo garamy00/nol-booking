@@ -84,18 +84,14 @@ def test_wait_for_debugger_returns_when_up(monkeypatch):
     nol_chrome.wait_for_debugger(timeout=5.0)
 
 
-def test_build_launch_args_has_flags_and_url_last():
+def test_build_launch_args_has_flags_and_url_last(monkeypatch):
+    monkeypatch.setenv("NOL_CHROME_BINARY", "/usr/bin/google-chrome")
     args = nol_chrome._build_launch_args("https://x/goods/1")
     assert args[-1] == "https://x/goods/1"
     assert "--remote-debugging-port=9222" in args
     assert any(
         a.startswith("--user-data-dir=") and a.endswith("chrome_profile") for a in args
     )
-
-
-def test_chrome_binary_env_override(monkeypatch):
-    monkeypatch.setenv("NOL_CHROME_BINARY", "/custom/chrome")
-    assert nol_chrome._chrome_binary() == "/custom/chrome"
 
 
 def test_chrome_binary_env_override_wins(monkeypatch):
