@@ -17,7 +17,7 @@ pip install -r requirements.txt
 
 ## 설정
 1. `.env.example`을 `.env`로 복사해 `[NOL]`·`[TELEGRAM]`을 채운다. `[RUNTIME]`은 선택.
-2. `nol_targets.yaml`에 감시할 좌석 조건(등급/연석 등)을 적는다.
+2. `nol_targets.example.yaml`을 `nol_targets.yaml`로 복사해 감시할 좌석 조건(등급/연석 등)을 적는다.
 
 ## 최초 로그인 (attach 모델)
 이 도구는 **이미 로그인된 Chrome에 attach**한다. 새 창을 띄우거나 자동 로그인하지 않는다.

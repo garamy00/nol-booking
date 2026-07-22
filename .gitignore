@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .env
+nol_targets.yaml
 .pytest_cache/
 chrome_profile/
 .superpowers/
