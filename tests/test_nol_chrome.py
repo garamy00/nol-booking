@@ -98,6 +98,27 @@ def test_chrome_binary_env_override(monkeypatch):
     assert nol_chrome._chrome_binary() == "/custom/chrome"
 
 
+def test_chrome_binary_env_override_wins(monkeypatch):
+    monkeypatch.setenv("NOL_CHROME_BINARY", "/custom/chrome")
+    assert nol_chrome._chrome_binary() == "/custom/chrome"
+
+
+def test_chrome_binary_finds_linux_chromium(monkeypatch):
+    monkeypatch.delenv("NOL_CHROME_BINARY", raising=False)
+    monkeypatch.setattr(nol_chrome.sys, "platform", "linux")
+    found = {"chromium": "/usr/bin/chromium"}
+    monkeypatch.setattr(nol_chrome.shutil, "which", lambda name: found.get(name))
+    assert nol_chrome._chrome_binary() == "/usr/bin/chromium"
+
+
+def test_chrome_binary_raises_when_none_found_on_linux(monkeypatch):
+    monkeypatch.delenv("NOL_CHROME_BINARY", raising=False)
+    monkeypatch.setattr(nol_chrome.sys, "platform", "linux")
+    monkeypatch.setattr(nol_chrome.shutil, "which", lambda name: None)
+    with pytest.raises(LauncherError):
+        nol_chrome._chrome_binary()
+
+
 def test_main_noop_when_debugger_already_up(monkeypatch):
     called = {"launch": False}
     monkeypatch.setattr(nol_chrome, "is_debugger_up", lambda _port=None: True)

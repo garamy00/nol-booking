@@ -10,8 +10,10 @@ from __future__ import annotations
 import configparser
 import logging
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import time
 
 import requests
@@ -32,6 +34,14 @@ PID_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".nol_chrome
 
 # macOS 기본 Chrome 실행 파일. NOL_CHROME_BINARY로 오버라이드 가능.
 _DEFAULT_CHROME_BINARY = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# Linux에서 자동 탐지할 Chrome/Chromium 실행 파일 후보(우선순위 순)
+_LINUX_CHROME_CANDIDATES = (
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+)
 
 # DevTools 준비 폴링 간격(초)
 _POLL_INTERVAL_SEC = 0.5
@@ -116,8 +126,28 @@ def wait_for_debugger(port: int = DEBUG_PORT, timeout: float = 20.0) -> None:
 
 
 def _chrome_binary() -> str:
-    """Chrome 실행 파일 경로. 환경변수 오버라이드 우선."""
-    return os.environ.get("NOL_CHROME_BINARY", _DEFAULT_CHROME_BINARY)
+    """Chrome 실행 파일 경로를 결정한다.
+
+    NOL_CHROME_BINARY가 있으면 그 값을, 없으면 플랫폼별로 탐지한다. macOS는 기본
+    앱 경로, Linux는 google-chrome/chromium 계열을 PATH에서 찾는다.
+
+    Raises:
+        LauncherError: Linux에서 후보를 하나도 찾지 못함.
+    """
+    override = os.environ.get("NOL_CHROME_BINARY")
+    if override:
+        return override
+
+    if sys.platform == "darwin":
+        return _DEFAULT_CHROME_BINARY
+
+    for candidate in _LINUX_CHROME_CANDIDATES:
+        path = shutil.which(candidate)
+        if path:
+            return path
+    raise LauncherError(
+        "no Chrome/Chromium found; install one or set NOL_CHROME_BINARY"
+    )
 
 
 def _build_launch_args(goods_url: str, port: int = DEBUG_PORT) -> list[str]:
