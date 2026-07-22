@@ -84,7 +84,7 @@ def _read_debug_port(env_path: str) -> int:
     if "RUNTIME" not in parser or "DEBUG_PORT" not in parser["RUNTIME"]:
         return DEBUG_PORT
     try:
-        return int(parser["RUNTIME"]["DEBUG_PORT"].strip())
+        return int(parser["RUNTIME"]["DEBUG_PORT"].strip().strip('"'))
     except ValueError:
         return DEBUG_PORT
 
@@ -257,8 +257,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
