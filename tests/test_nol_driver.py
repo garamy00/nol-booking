@@ -409,3 +409,75 @@ def test_run_loop_survives_tab_crash_and_reenters(monkeypatch):
     # 2회 크래시 후 3번째 진입에 성공(임계 미만이라 알림 없음)
     assert driver.attempts == 3
     assert sent == []
+
+
+# reenter: 크래시된 탭을 새 탭으로 갈아타 복구
+
+
+class _SwitchTo:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def new_window(self, kind):
+        self._owner._new_count += 1
+        handle = "fresh%d" % self._owner._new_count
+        self._owner.handles.append(handle)
+        self._owner.current = handle
+
+    def window(self, handle):
+        self._owner.current = handle
+
+
+class _CrashRecoverDriver:
+    """죽은 탭('crashed')에서 get은 실패하고, 새 탭에서 get은 성공하는 스텁."""
+
+    def __init__(self):
+        self.handles = ["crashed"]
+        self.current = "crashed"
+        self.get_calls: list[tuple[str, str]] = []
+        self.closed: list[str] = []
+        self._new_count = 0
+        self.switch_to = _SwitchTo(self)
+
+    @property
+    def window_handles(self):
+        return list(self.handles)
+
+    @property
+    def current_window_handle(self):
+        return self.current
+
+    @property
+    def current_url(self):
+        # 죽은 탭 URL 조회는 계속 실패한다
+        if self.current == "crashed":
+            raise WebDriverException("tab crashed")
+        return "https://tickets.interpark.com/%s" % self.current
+
+    def get(self, url):
+        self.get_calls.append((self.current, url))
+        # 죽은 탭에 대한 명령은 크래시된 채로 계속 실패한다
+        if self.current == "crashed":
+            raise WebDriverException("tab crashed")
+
+    def close(self):
+        self.closed.append(self.current)
+        self.handles.remove(self.current)
+        self.current = self.handles[-1] if self.handles else None
+
+
+def test_reenter_recovers_crashed_tab_via_fresh_tab(monkeypatch):
+    # 죽은 탭 get이 실패하면 새 탭을 열어 죽은 탭을 닫고 새 탭에서 goods로 이동해야 한다
+    driver = NolDriver(_cfg().nol)
+    driver._driver = _CrashRecoverDriver()
+    # enter_booking은 무거운 네비게이션이라 스텁 처리(복구 경로만 검증)
+    monkeypatch.setattr(driver, "enter_booking", lambda: None)
+
+    driver.reenter()
+
+    fake = driver._driver
+    assert "crashed" in fake.closed  # 죽은 탭은 닫혔다
+    # 마지막 goods 이동은 살아있는 새 탭에서 성공했다
+    last_handle, last_url = fake.get_calls[-1]
+    assert last_handle.startswith("fresh")
+    assert last_url == driver.goods_url

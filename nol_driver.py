@@ -649,10 +649,56 @@ class NolDriver:
         raise last_exc
 
     def reenter(self) -> None:
-        """세션 만료 후 goods 페이지부터 예매창 진입을 다시 수행한다."""
+        """세션 만료 후 goods 페이지부터 예매창 진입을 다시 수행한다.
+
+        현재 탭이 크래시(SIGTRAP 등)되면 Selenium 세션은 폐기된 target에 묶여
+        같은 탭에 대한 모든 명령이 계속 실패한다. 이때 새 탭(새 renderer)으로
+        갈아타 죽은 탭을 버리고 복구한다.
+        """
         self._require_attached()
-        self._driver.get(self.goods_url)
+        try:
+            self._driver.get(self.goods_url)
+        except WebDriverException as exc:
+            logger.warning(
+                "reenter: navigation failed (%s); recovering via fresh tab",
+                type(exc).__name__,
+            )
+            self._recover_via_fresh_tab()
         self.enter_booking()
+
+    def _recover_via_fresh_tab(self) -> None:
+        """크래시된 탭을 버리고 새 탭에서 goods로 이동한다.
+
+        Raises:
+            WebDriverException: 새 탭 생성·이동까지 실패하면 상위 루프가
+                재시도하도록 그대로 전파한다.
+        """
+        self._driver.switch_to.new_window("tab")
+        fresh = self._driver.current_window_handle
+
+        # 접근 불가(크래시)·잔여 interpark 탭을 닫아 탭 누수를 막는다
+        for handle in list(self._driver.window_handles):
+            if handle != fresh and self._is_stale_or_interpark(handle):
+                self._close_tab_safely(handle)
+
+        self._driver.switch_to.window(fresh)
+        self._driver.get(self.goods_url)
+
+    def _is_stale_or_interpark(self, handle: str) -> bool:
+        """해당 탭이 접근 불가(크래시)이거나 interpark 탭인지 판단한다."""
+        try:
+            self._driver.switch_to.window(handle)
+            return "interpark.com" in self._driver.current_url
+        except WebDriverException:
+            return True
+
+    def _close_tab_safely(self, handle: str) -> None:
+        """탭 닫기를 best-effort로 수행한다. 실패해도 복구를 계속한다."""
+        try:
+            self._driver.switch_to.window(handle)
+            self._driver.close()
+        except WebDriverException:
+            logger.warning("reenter: could not close stale tab; leaving it open")
 
     def close(self) -> None:
         """attach를 해제한다. 사용자 Chrome은 닫지 않는다(quit 호출 금지)."""
