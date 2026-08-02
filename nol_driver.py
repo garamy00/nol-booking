@@ -652,19 +652,74 @@ class NolDriver:
         """세션 만료 후 goods 페이지부터 예매창 진입을 다시 수행한다.
 
         현재 탭이 크래시(SIGTRAP 등)되면 Selenium 세션은 폐기된 target에 묶여
-        같은 탭에 대한 모든 명령이 계속 실패한다. 이때 새 탭(새 renderer)으로
-        갈아타 죽은 탭을 버리고 복구한다.
+        같은 탭에 대한 모든 명령이 계속 실패한다. 새 탭 복구 → 세션 재-attach
+        순으로 단계적으로 복구한 뒤 goods로 이동한다.
         """
         self._require_attached()
         try:
             self._driver.get(self.goods_url)
         except WebDriverException as exc:
             logger.warning(
-                "reenter: navigation failed (%s); recovering via fresh tab",
+                "reenter: navigation failed (%s); recovering",
                 type(exc).__name__,
             )
-            self._recover_via_fresh_tab()
+            self._recover_and_navigate()
         self.enter_booking()
+
+    def _recover_and_navigate(self) -> None:
+        """크래시 복구: 새 탭 → (실패 시) 세션 재-attach 순으로 goods 이동을 시도한다."""
+        # 탭 하나만 죽은 경우: 새 탭으로 갈아타면 복구된다
+        try:
+            self._recover_via_fresh_tab()
+            return
+        except WebDriverException as exc:
+            logger.warning(
+                "reenter: fresh-tab recovery failed (%s); re-attaching session",
+                type(exc).__name__,
+            )
+
+        # 세션이 죽은 target에 wedge된 경우: 브라우저는 살리고 세션만 새로 붙인다
+        self._reattach()
+        self._driver.get(self.goods_url)
+
+    def _reattach(self) -> None:
+        """죽은 target에 묶인 세션을 버리고 debug port에 새 세션으로 다시 붙는다.
+
+        브라우저 프로세스는 살아있으나 크래시된 target 탓에 기존 세션의 모든
+        명령이 실패하는 경우의 복구다. 사용자 Chrome은 종료하지 않는다.
+        """
+        old = self._driver
+        self._driver = None
+        self._wait = None
+
+        self.attach()
+
+        # 옛 세션의 chromedriver 프로세스만 정리한다(quit은 Browser.close를 보내
+        # 사용자 Chrome을 닫을 수 있어 호출하지 않고 서비스만 종료한다)
+        self._stop_chromedriver_quietly(old)
+
+    def _stop_chromedriver_quietly(self, driver) -> None:
+        """옛 세션의 chromedriver 프로세스를 best-effort로 종료한다."""
+        if driver is None:
+            return
+        try:
+            driver.service.stop()
+        except (OSError, AttributeError, WebDriverException):
+            logger.debug("failed to stop old chromedriver service; ignoring")
+
+    def login_state(self) -> str:
+        """헤더 기준 로그인 상태를 반환한다: 'in' | 'out' | 'unknown'.
+
+        조회 실패(크래시 등)나 판단 불가 시 'unknown'을 반환해 정상 흐름을
+        막지 않는다. 미로그인('out')일 때만 확정한다.
+        """
+        if self._driver is None:
+            return "unknown"
+        try:
+            state = self._driver.execute_script(interpark_dom.LOGIN_STATE_JS)
+        except WebDriverException:
+            return "unknown"
+        return state if state in ("in", "out") else "unknown"
 
     def _recover_via_fresh_tab(self) -> None:
         """크래시된 탭을 버리고 새 탭에서 goods로 이동한다.

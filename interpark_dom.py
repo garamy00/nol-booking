@@ -10,6 +10,17 @@ from __future__ import annotations
 SEAT_PAGE_MARKER = "onestop/seat"
 SEAT_CIRCLE = "circle.js-seat"
 
+# 헤더 로그인 상태 판별: '로그아웃' 링크가 있으면 로그인 상태('in'),
+# '로그인' 링크만 있으면 미로그인('out'), 둘 다 없으면 판단 불가('unknown').
+# 미로그인일 때만 확정하고 그 외엔 unknown으로 폴백해 오탐을 피한다.
+LOGIN_STATE_JS = """
+const texts = [...document.querySelectorAll('a, button')]
+    .map((e) => (e.innerText || e.textContent || '').trim());
+if (texts.includes('로그아웃')) return 'in';
+if (texts.includes('로그인')) return 'out';
+return 'unknown';
+"""
+
 # goods 페이지 캘린더
 GOODS_DAYS = "ul[data-view='days'] > li"
 GOODS_SIDE_TOGGLE = ".sideToggleBtn"

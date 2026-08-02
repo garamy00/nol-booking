@@ -134,6 +134,7 @@ def _run_loop(
 ) -> None:
     """바깥 루프: 예매창 (재)진입 → 안쪽 폴링. 타깃 발견 또는 종료 요청 시 반환한다."""
     first = True
+    logged_out_alerted = False
     while not control.should_stop():
         control.wait_if_paused()
         if control.should_stop():
@@ -148,16 +149,29 @@ def _run_loop(
             else:
                 driver.reenter()
         except RECOVERABLE_ENTRY_ERRORS as exc:
-            count = control.mark_failure()
-            logger.error(
-                "Booking entry failed (%s); attempt %d, retrying in %ds",
-                exc,
-                count,
-                cfg.runtime.reentry_backoff_seconds,
-            )
-            # 자가복구되는 일시적 실패는 알리지 않고, 임계 도달 시 한 번만 알린다
-            if count == cfg.runtime.failure_alert_threshold:
-                notify("[NOL] 예매창 진입이 %d회 연속 실패했습니다 (확인 필요)" % count)
+            # 로그인 만료로 인한 실패는 자동 복구가 불가하므로 구체적으로 한 번만 알린다
+            if driver.login_state() == "out":
+                if not logged_out_alerted:
+                    notify(
+                        "[NOL] 로그인이 만료된 것 같습니다. NOL에 재로그인해 주세요."
+                    )
+                    logged_out_alerted = True
+                logger.error(
+                    "Entry failed; session appears logged out, awaiting manual re-login"
+                )
+            else:
+                count = control.mark_failure()
+                logger.error(
+                    "Booking entry failed (%s); attempt %d, retrying in %ds",
+                    exc,
+                    count,
+                    cfg.runtime.reentry_backoff_seconds,
+                )
+                # 자가복구되는 일시적 실패는 알리지 않고, 임계 도달 시 한 번만 알린다
+                if count == cfg.runtime.failure_alert_threshold:
+                    notify(
+                        "[NOL] 예매창 진입이 %d회 연속 실패했습니다 (확인 필요)" % count
+                    )
             control.wait_for_stop(cfg.runtime.reentry_backoff_seconds)
             continue
 
@@ -166,6 +180,7 @@ def _run_loop(
         if control.snapshot().consecutive_failures >= failure_threshold:
             notify("[NOL] 예매창 진입 복구됨")
         control.mark_success()
+        logged_out_alerted = False
         control.set_state("polling")
 
         held = _poll_until_hold_or_expiry(driver, cfg, state, notify, control)

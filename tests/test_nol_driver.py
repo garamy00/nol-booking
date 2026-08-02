@@ -297,6 +297,9 @@ class _FlakyEntryDriver:
     def reenter(self):
         self.enter_booking()
 
+    def login_state(self):
+        return "unknown"
+
 
 def _collect_run_loop_notifications(driver, monkeypatch) -> list[str]:
     sent: list[str] = []
@@ -399,6 +402,9 @@ class _TabCrashEntryDriver:
     def reenter(self):
         self.enter_booking()
 
+    def login_state(self):
+        return "unknown"
+
 
 def test_run_loop_survives_tab_crash_and_reenters(monkeypatch):
     # 탭 크래시(raw WebDriverException)가 프로그램을 죽이지 않고 재진입으로 복구되어야 한다
@@ -481,3 +487,121 @@ def test_reenter_recovers_crashed_tab_via_fresh_tab(monkeypatch):
     last_handle, last_url = fake.get_calls[-1]
     assert last_handle.startswith("fresh")
     assert last_url == driver.goods_url
+
+
+# reenter: 새 탭 복구도 실패하면 세션 재-attach로 복구(브라우저는 생존)
+
+
+class _WedgedSessionDriver:
+    """모든 명령이 tab crashed로 실패하는 세션(브라우저는 살아있으나 세션 wedge)."""
+
+    def __init__(self):
+        self.switch_to = self
+
+    def get(self, url):
+        raise WebDriverException("tab crashed")
+
+    def new_window(self, kind):
+        # 새 탭 복구조차 실패한다
+        raise WebDriverException("tab crashed")
+
+    @property
+    def current_window_handle(self):
+        raise WebDriverException("tab crashed")
+
+    @property
+    def window_handles(self):
+        raise WebDriverException("tab crashed")
+
+
+class _HealthyReattachedDriver:
+    """재-attach 후 붙는 정상 세션."""
+
+    def __init__(self):
+        self.get_calls: list[str] = []
+
+    def get(self, url):
+        self.get_calls.append(url)
+
+
+def test_reenter_reattaches_when_fresh_tab_recovery_also_fails(monkeypatch):
+    # 새 탭 복구도 실패(세션 wedge)하면 Chrome은 살리고 세션만 재-attach해 복구한다
+    driver = NolDriver(_cfg().nol)
+    driver._driver = _WedgedSessionDriver()
+    healthy = _HealthyReattachedDriver()
+    calls = {"attach": 0}
+
+    def fake_attach():
+        calls["attach"] += 1
+        driver._driver = healthy
+
+    monkeypatch.setattr(driver, "attach", fake_attach)
+    monkeypatch.setattr(driver, "enter_booking", lambda: None)
+
+    driver.reenter()
+
+    assert calls["attach"] == 1  # 재-attach 발생
+    assert driver.goods_url in healthy.get_calls  # 새 세션에서 goods로 이동
+
+
+# login_state: 헤더 기준 로그인 상태 판별(best-effort)
+
+
+def _driver_with_script(result_or_exc):
+    driver = NolDriver(_cfg().nol)
+
+    class _D:
+        def execute_script(self, script, *args):
+            if isinstance(result_or_exc, Exception):
+                raise result_or_exc
+            return result_or_exc
+
+    driver._driver = _D()
+    return driver
+
+
+def test_login_state_returns_out_when_script_reports_out():
+    assert _driver_with_script("out").login_state() == "out"
+
+
+def test_login_state_returns_in_when_script_reports_in():
+    assert _driver_with_script("in").login_state() == "in"
+
+
+def test_login_state_returns_unknown_on_browser_error():
+    # 크래시 등으로 조회 실패 시 'unknown'을 반환해 정상 흐름을 막지 않는다
+    driver = _driver_with_script(WebDriverException("tab crashed"))
+    assert driver.login_state() == "unknown"
+
+
+# _run_loop: 로그아웃으로 인한 진입 실패는 전용 알림(1회)
+
+
+def test_run_loop_alerts_logout_once_when_logged_out(monkeypatch):
+    sent: list[str] = []
+    control = ControlState("20260802", "14:00")
+    monkeypatch.setattr(ControlState, "wait_for_stop", lambda self, t: True)
+
+    class _LoggedOutDriver:
+        def __init__(self, ctrl):
+            self._ctrl = ctrl
+            self.calls = 0
+
+        def enter_booking(self):
+            self.calls += 1
+            # 한 번 실패시키고 루프를 끝내도록 종료 요청
+            self._ctrl.request_stop()
+            raise DriverError("entry boom")
+
+        def reenter(self):
+            self.enter_booking()
+
+        def login_state(self):
+            return "out"
+
+    nol_monitor._run_loop(
+        _LoggedOutDriver(control), _cfg(), SeatState(), sent.append, control
+    )
+
+    assert any("로그인" in m for m in sent)  # 로그아웃 전용 알림
+    assert not any("연속 실패" in m for m in sent)  # 일반 실패 알림은 보내지 않는다
