@@ -8,4 +8,5 @@ chrome_profile/
 *.swp
 scratch_nol_verify.py
 .nol_chrome.pid
+.nol_monitor.lock
 .venv/
