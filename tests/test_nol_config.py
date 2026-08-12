@@ -59,6 +59,30 @@ def test_load_nol_config_parses_all_sections(tmp_path):
     assert cfg.poll.interval_max == 60
 
 
+def test_floor_target_field_parsed(tmp_path):
+    nol_targets = textwrap.dedent(
+        """
+        targets:
+          - grade: "VIP석"
+            section: "B"
+            floor: "1층"
+            consecutive: 2
+        poll:
+          interval_min: 30
+          interval_max: 60
+        """
+    )
+    env_path, nol_targets_path = _write(tmp_path, ENV_OK, nol_targets)
+    cfg = load_nol_config(env_path, nol_targets_path)
+    assert cfg.targets[0].floor == "1층"
+
+
+def test_floor_defaults_to_none_when_absent(tmp_path):
+    env_path, nol_targets_path = _write(tmp_path, ENV_OK, NOL_TARGETS_OK)
+    cfg = load_nol_config(env_path, nol_targets_path)
+    assert cfg.targets[0].floor is None
+
+
 def test_missing_nol_key_raises_configerror(tmp_path):
     bad_env = ENV_OK.replace("GOODS_ID=26005135\n", "")
     env_path, nol_targets_path = _write(tmp_path, bad_env, NOL_TARGETS_OK)

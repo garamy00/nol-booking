@@ -83,16 +83,25 @@ class NolSeatGroup:
     section: str
     row: int
     numbers: tuple[int, ...]
+    floor: str = "1층"
 
     def key(self) -> tuple:
         """dedupe용 고유 키."""
-        return (self.grade, self.section, self.row, self.numbers[0], self.numbers[-1])
+        return (
+            self.floor,
+            self.grade,
+            self.section,
+            self.row,
+            self.numbers[0],
+            self.numbers[-1],
+        )
 
     def label(self) -> str:
         """알림용 사람이 읽는 문자열."""
         span = "%d-%d" % (self.numbers[0], self.numbers[-1])
-        return "%s %s구역 %d열 %s번 (%d연석)" % (
+        return "%s %s %s구역 %d열 %s번 (%d연석)" % (
             self.grade,
+            self.floor,
             self.section,
             self.row,
             span,
@@ -101,8 +110,10 @@ class NolSeatGroup:
 
 
 def _seat_matches_target(seat: NolSeat, target: NolTarget) -> bool:
-    """좌석이 타깃의 등급/구역/열 조건(설정된 것만)을 만족하는지 확인한다."""
+    """좌석이 타깃의 등급/층/구역/열 조건(설정된 것만)을 만족하는지 확인한다."""
     if target.grade is not None and seat.grade != target.grade:
+        return False
+    if target.floor is not None and seat.floor != target.floor:
         return False
     if target.section is not None and seat.section != target.section:
         return False
@@ -150,12 +161,13 @@ def find_nol_groups(
     for target in targets:
         filtered = [seat for seat in seats if _seat_matches_target(seat, target)]
 
-        # (구역, 열)별로 묶고 각각에서 연속 구간을 찾아 consecutive 이상만 채택
-        by_row: dict[tuple[str, int], list[NolSeat]] = {}
+        # (층, 구역, 열)별로 묶는다. 층을 키에 넣지 않으면 1·2층의 같은 구역·열
+        # 좌석이 한 묶음으로 섞여 잘못된 연석으로 매칭된다.
+        by_row: dict[tuple[str, str, int], list[NolSeat]] = {}
         for seat in filtered:
-            by_row.setdefault((seat.section, seat.row), []).append(seat)
+            by_row.setdefault((seat.floor, seat.section, seat.row), []).append(seat)
 
-        for (section, row), row_seats in by_row.items():
+        for (floor, section, row), row_seats in by_row.items():
             for run in _seat_runs(row_seats):
                 if len(run) >= target.consecutive:
                     groups.append(
@@ -164,6 +176,7 @@ def find_nol_groups(
                             section=section,
                             row=row,
                             numbers=tuple(seat.number for seat in run),
+                            floor=floor,
                         )
                     )
 

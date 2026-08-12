@@ -2,8 +2,15 @@ from config import NolTarget
 from nol_seats import NolSeat, NolSeatGroup, find_nol_groups, parse_rowno, parse_seat_meta
 
 
-def _seat(section, row, number, grade, seat_id="s"):
-    return NolSeat(section=section, row=row, number=number, grade=grade, seat_id=seat_id)
+def _seat(section, row, number, grade, seat_id="s", floor="1층"):
+    return NolSeat(
+        section=section,
+        row=row,
+        number=number,
+        grade=grade,
+        floor=floor,
+        seat_id=seat_id,
+    )
 
 
 # parse_rowno
@@ -154,10 +161,46 @@ def test_no_grade_filter_splits_run_by_grade_even_if_numbers_consecutive():
 
 def test_group_key_and_label():
     group = NolSeatGroup(grade="R석", section="A", row=12, numbers=(5, 6))
-    assert group.key() == ("R석", "A", 12, 5, 6)
+    assert group.key() == ("1층", "R석", "A", 12, 5, 6)
     label = group.label()
     assert "R석" in label
     assert "A구역" in label
     assert "12열" in label
     assert "5-6번" in label
     assert "2연석" in label
+
+
+# floor(층) 필터·구분
+
+
+def test_floor_filter_excludes_other_floor_seats():
+    # floor를 지정하면 다른 층 좌석은 제외된다
+    seats = [
+        _seat("B", 1, 10, "VIP석", floor="1층"),
+        _seat("B", 1, 11, "VIP석", floor="2층"),
+    ]
+    target = NolTarget(section="B", floor="1층", consecutive=1)
+    groups = find_nol_groups(seats, [target])
+    assert len(groups) == 1
+    assert groups[0].floor == "1층"
+    assert groups[0].numbers == (10,)
+
+
+def test_same_section_row_on_different_floors_do_not_merge():
+    # 1·2층에 같은 B구역 1열이 있어도 서로 다른 묶음으로 분리되어야 한다
+    seats = [
+        _seat("B", 1, 10, "VIP석", floor="1층"),
+        _seat("B", 1, 11, "VIP석", floor="2층"),
+    ]
+    target = NolTarget(section="B", consecutive=1)
+    groups = find_nol_groups(seats, [target])
+    assert len(groups) == 2
+    assert {g.floor for g in groups} == {"1층", "2층"}
+
+
+def test_group_label_includes_floor():
+    # 알림 라벨에 층이 드러나 어느 층인지 알 수 있어야 한다
+    group = NolSeatGroup(
+        grade="VIP석", section="B", row=1, numbers=(10, 11), floor="2층"
+    )
+    assert "2층" in group.label()

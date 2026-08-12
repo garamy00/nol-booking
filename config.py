@@ -38,6 +38,7 @@ class NolTarget:
     section: str | None = None
     rows: list[int] | None = None
     consecutive: int = 1
+    floor: str | None = None
 
 
 @dataclass
@@ -178,6 +179,9 @@ def _parse_nol_target(item: dict, index: int) -> NolTarget:
     section_raw = item.get("section")
     section = str(section_raw) if section_raw is not None else None
 
+    floor_raw = item.get("floor")
+    floor = str(floor_raw) if floor_raw is not None else None
+
     rows = _parse_nol_rows(item.get("rows"), index)
 
     try:
@@ -185,7 +189,9 @@ def _parse_nol_target(item: dict, index: int) -> NolTarget:
     except (TypeError, ValueError) as exc:
         raise ConfigError("invalid nol target %d: %s" % (index, str(exc))) from exc
 
-    return NolTarget(grade=grade, section=section, rows=rows, consecutive=consecutive)
+    return NolTarget(
+        grade=grade, section=section, rows=rows, consecutive=consecutive, floor=floor
+    )
 
 
 def _parse_nol_rows(rows_raw: object, index: int) -> list[int] | None:
